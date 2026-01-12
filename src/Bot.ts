@@ -31,8 +31,8 @@ export class ChatBot {
     public drawManager!: DrawManager;
     public rouletteManager!: RouletteManager;
     
-    public settings: BotSettings;
-    public overlaySettings: OverlaySettings;
+    public settings: BotSettings = defaultSettings; // Initialize with defaults
+    public overlaySettings: OverlaySettings = defaultOverlaySettings;
     private channelId: string = '';
     private onChatCallback: ((chat: ChatEvent) => void) | null = null;
     private onConnectCallback: (() => void) | null = null;
@@ -45,13 +45,20 @@ export class ChatBot {
 
     constructor(private channelIdOrName: string) {
         this.client = new ChzzkClient({ nidAuth: config.nidAuth, nidSession: config.nidSes });
-        this.settings = defaultSettings;
-        this.overlaySettings = defaultOverlaySettings;
+        this.channelId = channelIdOrName; // 초기값 설정 (나중에 connect에서 갱신됨)
     }
 
     public async init(): Promise<void> {
-        console.log('[Bot] 데이터 로딩 및 초기화 시작...');
-        const loadedData = await DataManager.loadData();
+        // 채널 ID가 아직 확정되지 않았을 수 있으므로 connect 시점에 로드하거나,
+        // 생성자에서 ID를 받는 경우 바로 로드합니다.
+        // 여기서는 connect() 호출 전에는 기본값만 가집니다.
+        console.log('[Bot] Initialized instance.');
+    }
+
+    // 실제 데이터 로드는 채널 ID가 확인된 후 connect()에서 수행
+    private async loadChannelData(realChannelId: string) {
+        console.log(`[Bot] 데이터 로딩 시작 (Channel: ${realChannelId})...`);
+        const loadedData = await DataManager.loadData(realChannelId);
 
         this.settingsManager = new SettingsManager(loadedData.settings);
         this.settings = this.settingsManager.getSettings();
@@ -73,15 +80,19 @@ export class ChatBot {
         this.drawManager.setOnStateChangeListener(() => this.notifyStateChange('draw'));
         this.rouletteManager.setOnStateChangeListener(() => this.notifyStateChange('roulette'));
         this.pointManager.setOnStateChangeListener(() => this.notifyStateChange('points'));
-        console.log('[Bot] 초기화 완료.');
+        console.log('[Bot] 데이터 로딩 완료.');
     }
 
     private notifyStateChange(type: string) { if (this.onStateChangeCallbacks[type]) { this.onStateChangeCallbacks[type](); } }
     public setOnStateChangeListener(type: string, listener: StateListener) { this.onStateChangeCallbacks[type] = listener; }
     
     public saveAllData(): void { 
-        const participantState = this.participationManager.getState();
-        DataManager.saveData({
+        if (!this.channelId) return; // 채널 ID 없으면 저장 불가
+
+        const participantState = this.participationManager?.getState();
+        if (!participantState) return;
+
+        DataManager.saveData(this.channelId, {
             ...this.songManager.getData(),
             commands: this.commandManager.getCommands(),
             counters: this.counterManager.getCounters(),
@@ -104,7 +115,13 @@ export class ChatBot {
         }); 
     }
     
-    public updateSettings(newSettings: Partial<BotSettings>) { this.settingsManager.updateSettings(newSettings); this.settings = this.settingsManager.getSettings(); this.saveAllData(); }
+    public updateSettings(newSettings: Partial<BotSettings>) { 
+        if(this.settingsManager) {
+            this.settingsManager.updateSettings(newSettings); 
+            this.settings = this.settingsManager.getSettings(); 
+            this.saveAllData(); 
+        }
+    }
     
     public updateOverlaySettings(newSettings: Partial<OverlaySettings>) {
         this.overlaySettings = { ...this.overlaySettings, ...newSettings };
@@ -136,9 +153,9 @@ export class ChatBot {
             }
 
             console.log(`[Bot] 연결 시도: ${this.channelIdOrName}`);
+            // 채널 ID 확정
             if (/^[a-f0-9]{32}$/.test(this.channelIdOrName)) {
                 this.channelId = this.channelIdOrName;
-                console.log(`[Bot] 채널 ID 직접 사용: ${this.channelId}`);
             } else {
                 console.log(`[Bot] 채널 이름으로 검색: ${this.channelIdOrName}`);
                 const searchResult = await this.client.search.channels(this.channelIdOrName);
@@ -147,8 +164,11 @@ export class ChatBot {
                     throw new Error(`'${this.channelIdOrName}' 채널을 찾을 수 없습니다.`);
                 }
                 this.channelId = firstChannel.channelId;
-                console.log(`[Bot] 검색된 채널 ID: ${this.channelId}`);
             }
+            console.log(`[Bot] Target Channel ID: ${this.channelId}`);
+
+            // DB에서 데이터 로드 (채널 ID 확정 후)
+            await this.loadChannelData(this.channelId);
 
             console.log(`[Bot] 채널 정보 가져오기...`);
             this.channel = await this.client.channel(this.channelId);
@@ -162,19 +182,14 @@ export class ChatBot {
 
             this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
 
-            this.macroManager.setChatClient(this.chat);
+            if(this.macroManager) this.macroManager.setChatClient(this.chat);
             this.setupListeners();
             console.log(`[Bot] 치지직 채팅 서버에 연결 중...`);
             await this.chat.connect();
             console.log(`[Bot] 봇이 성공적으로 연결되었습니다.`);
         } catch (error: any) {
             console.error(`[Bot] 연결 실패: ${error.message}`);
-            if ((error as any).response) {
-                const errRes = (error as any).response;
-                console.error(`[Bot] 응답 상태: ${errRes.status}`);
-                console.error(`[Bot] 응답 데이터:`, errRes.data);
-            }
-            this.macroManager.stopAllMacros();
+            if(this.macroManager) this.macroManager.stopAllMacros();
             throw error;
         }
     }
@@ -193,7 +208,6 @@ export class ChatBot {
                 try {
                     const selfProfile = await currentChat.selfProfile();
                     this.botUserIdHash = selfProfile.userIdHash;
-                    console.log(`[Bot] 봇의 userIdHash: ${this.botUserIdHash}`);
                 } catch (error) {
                     console.error('[Bot] 봇 자신의 userIdHash를 가져오는 데 실패했습니다:', error);
                 }
@@ -205,24 +219,18 @@ export class ChatBot {
         });
 
         this.chat.on('chat', async (chat: ChatEvent) => {
-            // 대시보드 콜백 (채팅 표시용)
             if (this.onChatCallback) {
                 this.onChatCallback(chat);
             }
 
-            // 봇 자신의 메시지 무시
             if (chat.profile.userIdHash === this.botUserIdHash) return;
 
             const msg = chat.message?.trim();
             if (!msg) return;
 
-            // 포인트 지급 (백그라운드)
-            this.pointManager.awardPoints(chat, this.settings);
+            this.pointManager?.awardPoints(chat, this.settings);
+            this.drawManager?.handleChat(chat);
 
-            // 시청자 추첨 참여 체크 (키워드 매칭)
-            this.drawManager.handleChat(chat);
-
-            // ! 로 시작하는 시스템 명령어 먼저 체크
             if (msg[0] === '!') {
                 const firstWord = msg.split(' ')[0];
                 switch (firstWord) {
@@ -237,13 +245,13 @@ export class ChatBot {
                     case '!스킵':
                     case '!현재노래':
                     case '!다음곡':
-                        this.songManager.handleCommand(chat, this.chat!, this.settings);
+                        this.songManager?.handleCommand(chat, this.chat!, this.settings);
                         return;
                     case '!포인트':
-                        this.pointManager.handleCommand(chat, this.chat!, this.settings);
+                        this.pointManager?.handleCommand(chat, this.chat!, this.settings);
                         return;
                     case '!투표':
-                        this.voteManager.handleCommand(chat, this.chat!);
+                        this.voteManager?.handleCommand(chat, this.chat!);
                         return;
                     case '!신청곡':
                         this.chat?.sendChat('🎵 신청곡 명령어: !노래 [유튜브URL] (신청), !대기열 (목록), !현재노래 (현재곡), !스킵 (스킵/매니저전용)');
@@ -251,10 +259,9 @@ export class ChatBot {
                 }
             }
 
-            // 등록된 커스텀 명령어/카운터 체크 (접두사 없는 명령어 포함: '무야호', '?' 등)
-            if (this.commandManager.hasCommand(msg)) {
+            if (this.commandManager?.hasCommand(msg)) {
                 this.commandManager.executeCommand(chat, this.chat!);
-            } else if (this.counterManager.hasCounter(msg)) {
+            } else if (this.counterManager?.hasCounter(msg)) {
                 this.counterManager.checkAndRespond(chat, this.chat!);
             }
         });
@@ -264,18 +271,18 @@ export class ChatBot {
             const match = donation.message?.match(youtubeUrlRegex);
             if (match && match[0]) {
                 try {
-                    await this.songManager.addSongFromDonation(donation, match[0], this.settings);
+                    await this.songManager?.addSongFromDonation(donation, match[0], this.settings);
                     this.chat?.sendChat(`후원으로 노래가 신청되었습니다. 감사합니다!`);
                 } catch(e: any) { this.chat?.sendChat(e.message); }
             }
         });
 
-        this.chat.on('disconnect', () => this.macroManager.stopAllMacros());
+        this.chat.on('disconnect', () => this.macroManager?.stopAllMacros());
     }
 
     public async disconnect(): Promise<void> {
         if (this.chat) {
-            this.macroManager.stopAllMacros();
+            this.macroManager?.stopAllMacros();
             await this.chat.disconnect();
             this.chat = null;
             this.hasConnected = false;

@@ -1,5 +1,4 @@
-import fs from "fs/promises";
-import path from "path";
+import { supabase } from "./supabase";
 import { BotSettings, defaultSettings } from "./SettingsManager";
 import { Song } from "./SongManager";
 import { Command } from "./CommandManager";
@@ -9,8 +8,6 @@ import { UserPoints } from "./PointManager";
 import { Participant } from "./ParticipationManager";
 import { DrawSession } from "./DrawManager";
 import { RouletteSession } from "./RouletteManager";
-
-const DATA_FILE = path.join(__dirname, "..", "bot_data.json");
 
 export interface VoteOption {
     id: string;
@@ -44,10 +41,9 @@ export interface ParticipationData {
     userParticipationHistory?: { [key: string]: { nickname: string; count: number } };
 }
 
-// 오버레이 설정
 export interface OverlaySettings {
-    backgroundOpacity: number;      // 0-100 슬라이드바
-    themeColor: string;             // 테마 색상
+    backgroundOpacity: number;
+    themeColor: string;
     position: 'top' | 'center' | 'bottom';
     size: 'small' | 'medium' | 'large';
     showAnimation: boolean;
@@ -77,73 +73,78 @@ export interface BotData {
     songQueue: Song[];
     currentSong: Song | null;
     commands: Command[];
-    // 새로 추가된 데이터
     drawHistory?: DrawSession[];
     rouletteHistory?: RouletteSession[];
     overlaySettings?: OverlaySettings;
 }
 
-let cachedData: BotData | null = null;
+// 채널별 데이터 캐싱
+const cache: { [channelId: string]: BotData } = {};
 
 export class DataManager {
-    static async loadData(): Promise<BotData> {
-        if (cachedData) {
-            return cachedData;
+    // 채널 ID를 인자로 받도록 수정
+    static async loadData(channelId: string): Promise<BotData> {
+        if (cache[channelId]) {
+            return cache[channelId];
         }
+
+        const defaultData: BotData = {
+            points: {},
+            votes: [],
+            participants: {
+                queue: [],
+                participants: [],
+                maxParticipants: 5,
+                isParticipationActive: false,
+                userParticipationHistory: {}
+            },
+            counters: [],
+            macros: [],
+            settings: defaultSettings,
+            songQueue: [],
+            currentSong: null,
+            commands: [],
+            drawHistory: [],
+            rouletteHistory: [],
+            overlaySettings: defaultOverlaySettings,
+        };
+
         try {
-            const fileContent = await fs.readFile(DATA_FILE, "utf-8");
-            cachedData = JSON.parse(fileContent);
-            cachedData = {
-                points: {},
-                votes: [],
-                participants: {
-                    queue: [],
-                    participants: [],
-                    maxParticipants: 5,
-                    isParticipationActive: false,
-                    userParticipationHistory: {}
-                },
-                counters: [],
-                macros: [],
-                settings: defaultSettings,
-                songQueue: [],
-                    currentSong: null,
-                commands: [],
-                drawHistory: [],
-                rouletteHistory: [],
-                overlaySettings: defaultOverlaySettings,
-                ...cachedData,
-            };
-            return cachedData;
+            const { data, error } = await supabase
+                .from('bot_data')
+                .select('data')
+                .eq('channel_id', channelId)
+                .single();
+
+            if (error || !data) {
+                console.log(`[DataManager] No data found for ${channelId}, using defaults.`);
+                cache[channelId] = defaultData;
+                return defaultData;
+            }
+
+            // 병합 (새로운 필드가 추가되었을 때를 대비)
+            cache[channelId] = { ...defaultData, ...data.data };
+            return cache[channelId];
+
         } catch (error) {
-            console.warn("bot_data.json 파일을 읽거나 파싱하는 중 오류 발생. 새 데이터를 생성합니다.", error);
-            cachedData = {
-                points: {},
-                votes: [],
-                participants: {
-                    queue: [],
-                    participants: [],
-                    maxParticipants: 5,
-                    isParticipationActive: false,
-                    userParticipationHistory: {}
-                },
-                counters: [],
-                macros: [],
-                settings: defaultSettings,
-                songQueue: [],
-                currentSong: null,
-                commands: [],
-                drawHistory: [],
-                rouletteHistory: [],
-                overlaySettings: defaultOverlaySettings,
-            };
-            await DataManager.saveData(cachedData);
-            return cachedData;
+            console.error(`[DataManager] Error loading data for ${channelId}:`, error);
+            return defaultData;
         }
     }
 
-    static async saveData(data: BotData): Promise<void> {
-        cachedData = data;
-        await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+    static async saveData(channelId: string, data: BotData): Promise<void> {
+        cache[channelId] = data;
+        
+        // 비동기로 저장 (성능 위해 await 안 함, 필요 시 await 추가)
+        supabase
+            .from('bot_data')
+            .upsert({ 
+                channel_id: channelId, 
+                data: data,
+                updated_at: new Date().toISOString()
+            })
+            .then(({ error }) => {
+                if (error) console.error(`[DataManager] Failed to save data for ${channelId}:`, error);
+            });
     }
 }
