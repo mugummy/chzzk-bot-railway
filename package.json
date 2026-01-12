@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@distube/ytdl-core": "^4.16.12",
+    "@supabase/supabase-js": "^2.39.0",
     "axios": "^1.7.2",
     "chzzk": "^1.10.4",
     "cookie-parser": "^1.4.6",
