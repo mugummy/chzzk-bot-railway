@@ -55,7 +55,7 @@ export class BotManager {
 
   private async syncBots(): Promise<void> {
     try {
-      // 활성 세션 가져오기
+      // 활성 세션 가져오기 (users를 통해 조인)
       const { data: sessions, error } = await supabase
         .from('bot_sessions')
         .select(`
@@ -65,8 +65,7 @@ export class BotManager {
             chzzk_id,
             channel_id,
             channel_name
-          ),
-          bot_settings!inner (*)
+          )
         `)
         .eq('is_active', true);
 
@@ -96,7 +95,25 @@ export class BotManager {
       for (const session of activeSessions) {
         const userId = session.user_id;
         const user = session.users as User;
-        const settings = session.bot_settings as BotSettings;
+
+        // bot_settings 별도 조회
+        const { data: settingsData } = await supabase
+          .from('bot_settings')
+          .select('*')
+          .eq('user_id', userId)
+          .single();
+
+        const settings = settingsData as BotSettings || {
+          prefix: '!',
+          points_enabled: true,
+          points_per_chat: 10,
+          points_name: '포인트',
+          points_cooldown: 60,
+          song_request_enabled: true,
+          song_request_mode: 'cooldown',
+          song_request_cooldown: 300,
+          song_request_min_donation: 1000,
+        };
 
         if (!this.bots.has(userId)) {
           console.log(`[BotManager] Starting bot for user ${userId} (${user.channel_name})`);
