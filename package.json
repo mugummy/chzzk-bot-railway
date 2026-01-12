@@ -4,7 +4,7 @@
   "description": "Chzzk chat bot server",
   "scripts": {
     "start": "ts-node src/main.ts",
-    "build": "tsc",
+    "build": "echo 'Build skipped. Using ts-node for runtime.'",
     "dev": "ts-node src/main.ts"
   },
   "dependencies": {
