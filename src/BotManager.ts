@@ -1,3 +1,4 @@
+import { WebSocketServer } from 'ws';
 import { supabase, User, BotSettings, BotSession } from './supabase';
 import { BotInstance } from './BotInstance';
 
@@ -6,9 +7,16 @@ export class BotManager {
   private pollInterval: number;
   private pollTimer: NodeJS.Timeout | null = null;
   private isRunning: boolean = false;
+  private wss: WebSocketServer;
+  private broadcastFunction: ((userId: string, data: any) => void) | null = null;
 
-  constructor() {
+  constructor(wss: WebSocketServer) {
+    this.wss = wss;
     this.pollInterval = parseInt(process.env.POLL_INTERVAL || '5000');
+  }
+
+  setBroadcastFunction(fn: (userId: string, data: any) => void) {
+    this.broadcastFunction = fn;
   }
 
   async start(): Promise<void> {
@@ -56,9 +64,7 @@ export class BotManager {
             id,
             chzzk_id,
             channel_id,
-            channel_name,
-            nid_auth,
-            nid_session
+            channel_name
           ),
           bot_settings!inner (*)
         `)
@@ -78,6 +84,11 @@ export class BotManager {
           console.log(`[BotManager] Stopping inactive bot for user ${userId}`);
           await bot.disconnect();
           this.bots.delete(userId);
+
+          // 클라이언트에 알림
+          if (this.broadcastFunction) {
+            this.broadcastFunction(userId, { type: 'botStatus', payload: { connected: false } });
+          }
         }
       }
 
@@ -94,14 +105,24 @@ export class BotManager {
             const bot = new BotInstance({
               userId,
               channelId: user.channel_id,
-              nidAuth: user.nid_auth || undefined,
-              nidSession: user.nid_session || undefined,
               settings,
+            });
+
+            // 상태 변경 리스너 설정
+            bot.setOnStateChangeListener((type, data) => {
+              if (this.broadcastFunction) {
+                this.broadcastFunction(userId, { type, payload: data });
+              }
             });
 
             await bot.connect();
             this.bots.set(userId, bot);
             console.log(`[BotManager] Bot started for ${user.channel_name}`);
+
+            // 클라이언트에 알림
+            if (this.broadcastFunction) {
+              this.broadcastFunction(userId, { type: 'botStatus', payload: { connected: true } });
+            }
           } catch (err: any) {
             console.error(`[BotManager] Failed to start bot for ${user.channel_name}:`, err.message);
 
@@ -113,6 +134,14 @@ export class BotManager {
                 error_message: err.message
               })
               .eq('id', session.id);
+
+            // 클라이언트에 에러 알림
+            if (this.broadcastFunction) {
+              this.broadcastFunction(userId, {
+                type: 'botError',
+                payload: { message: err.message }
+              });
+            }
           }
         }
 
@@ -125,6 +154,10 @@ export class BotManager {
     } catch (err: any) {
       console.error('[BotManager] Sync error:', err.message);
     }
+  }
+
+  getBot(userId: string): BotInstance | undefined {
+    return this.bots.get(userId);
   }
 
   getActiveBotsCount(): number {
