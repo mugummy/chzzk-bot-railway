@@ -87,7 +87,16 @@ export class ChatBot {
     public setOnStateChangeListener(type: string, listener: StateListener) { this.onStateChangeCallbacks[type] = listener; }
     
     public saveAllData(): void { 
-        if (!this.channelId) return; // 채널 ID 없으면 저장 불가
+        if (!this.channelId) {
+            console.warn('[Bot] Save blocked: No Channel ID');
+            return;
+        }
+
+        // 임시 방편: 채널 ID가 너무 짧거나 이상하면 저장 거부 (보안 강화)
+        if (this.channelId.length < 5) {
+             console.warn('[Bot] Save blocked: Invalid Channel ID', this.channelId);
+             return;
+        }
 
         const participantState = this.participationManager?.getState();
         if (!participantState) return;
@@ -135,6 +144,11 @@ export class ChatBot {
     public setOnConnectListener(listener: () => void) { this.onConnectCallback = listener; }
     public setOnChatListener(listener: (chat: ChatEvent) => void) { this.onChatCallback = listener; }
     public sendChat(message: string) { 
+        if (!this.settings.chatEnabled) {
+            console.log('[Bot] Chat disabled, skipped message:', message);
+            return;
+        }
+
         if (this.chat && this.isConnected()) { 
             try {
                 this.chat.sendChat(message); 

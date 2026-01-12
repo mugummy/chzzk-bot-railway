@@ -1,5 +1,6 @@
 
 export interface BotSettings {
+    chatEnabled: boolean; // 봇 채팅 활성화 여부
     songRequestMode: 'cooldown' | 'donation' | 'off';
     songRequestMinDonation: number;
     songRequestCooldown: number;
@@ -11,6 +12,7 @@ export interface BotSettings {
 }
 
 export const defaultSettings: BotSettings = {
+    chatEnabled: true,
     songRequestMode: 'cooldown',
     songRequestMinDonation: 1000,
     songRequestCooldown: 300,

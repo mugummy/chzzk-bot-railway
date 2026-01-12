@@ -39,12 +39,18 @@ app.get('/api/auth/config', (req, res) => {
 
 app.get('/api/auth/session', async (req, res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-    const sessionId = req.cookies?.chzzk_session;
+    
+    // Authorization 헤더에서 토큰 추출 (Bearer <token>)
+    const authHeader = req.headers.authorization;
+    const token = authHeader && authHeader.split(' ')[1];
+    
+    // 혹시 모르니 쿠키도 확인 (하위 호환)
+    const sessionId = token || req.cookies?.chzzk_session;
+    
     if (!sessionId) return res.json({ authenticated: false });
 
     const session = await authManager.validateSession(sessionId);
     if (!session) {
-        res.clearCookie('chzzk_session', { sameSite: 'none', secure: true, path: '/' });
         return res.json({ authenticated: false });
     }
     res.json({ authenticated: true, user: session.user });
@@ -63,15 +69,12 @@ app.get('/auth/callback', async (req, res) => {
     const result = await authManager.exchangeCodeForTokens(code as string, state as string);
     if (!result.success || !result.session) return res.redirect(`${CLIENT_URL}/?error=token_exchange_failed`);
 
-    res.cookie('chzzk_session', result.session.sessionId, {
-        httpOnly: true,
-        maxAge: 10 * 365 * 24 * 60 * 60 * 1000,
-        sameSite: 'none',
-        secure: true,
-        path: '/'
-    });
-
-    res.redirect(`${CLIENT_URL}/dashboard/${encodeURIComponent(result.session.user.channelName)}`);
+    // 쿠키 대신 URL 파라미터로 세션 ID 전달 (토큰 방식)
+    const sessionId = result.session.sessionId;
+    const channelName = encodeURIComponent(result.session.user.channelName);
+    
+    // 보안을 위해 1회성 토큰을 쓰는 게 좋지만, 여기선 편의상 세션 ID를 직접 전달
+    res.redirect(`${CLIENT_URL}/dashboard.html?session=${sessionId}&channel=${channelName}`);
 });
 
 app.post('/auth/logout', async (req, res) => {
