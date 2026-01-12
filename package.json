@@ -2,6 +2,9 @@
   "name": "chzzk-bot-server",
   "version": "1.0.0",
   "description": "Chzzk chat bot server",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "start": "npx tsx src/main.ts",
     "build": "echo 'Build skipped. Using tsx for runtime.'",

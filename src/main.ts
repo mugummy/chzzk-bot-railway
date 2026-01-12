@@ -15,7 +15,9 @@ import cors from 'cors';
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
-const port = process.env.PORT || 8080;
+
+// Railway에서 제공하는 PORT 환경변수를 사용해야 함
+const port = parseInt(process.env.PORT || '8080', 10);
 
 // 인증 매니저 초기화
 const authManager = new AuthManager(
@@ -40,7 +42,7 @@ app.use(cookieParser());
 
 // Root route for health check
 app.get('/', (req, res) => {
-    res.send('Chzzk Bot Server is running.');
+    res.send(`Chzzk Bot Server is running on port ${port}`);
 });
 
 // ========== OAuth 인증 라우트 ==========
@@ -364,6 +366,7 @@ app.get('/api/streamer-info', (req, res) => {
 // 나머지 API들은 원본 main.ts의 라우트들을 그대로 사용하면 됩니다.
 // (생략 없이 전체를 유지하기 위해 필요한 라우트들을 여기에 포함합니다.)
 
-server.listen(port, () => {
+// 0.0.0.0으로 바인딩하여 외부 접속 허용
+server.listen(port, '0.0.0.0', () => {
     console.log(`✅ 서버가 포트 ${port}에서 실행 중입니다.`);
 });
