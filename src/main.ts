@@ -126,21 +126,32 @@ wss.on('connection', async (ws, req) => {
             const channelId = currentSession.user.channelId;
             let activeBot = channelBotMap.get(channelId);
 
-            if (activeBot && activeBot.isConnected()) {
-                console.log(`[Server] Reusing existing bot instance for channel: ${channelId}`);
+            if (activeBot) {
+                console.log(`[Server] Existing bot found for channel: ${channelId}`);
+                if (!activeBot.isConnected()) {
+                    console.log(`[Server] Bot disconnected, reconnecting...`);
+                    await activeBot.connect();
+                }
             } else {
                 console.log(`[Server] Creating new bot instance for channel: ${channelId}`);
                 activeBot = new ChatBot(channelId);
+                channelBotMap.set(channelId, activeBot); // 맵에 먼저 등록 (중복 방지)
                 await activeBot.init();
                 await activeBot.connect();
-                channelBotMap.set(channelId, activeBot);
             }
 
+            // 클라이언트에 연결 성공 응답 전송
             ws.send(JSON.stringify({ 
                 type: 'connectResult', 
                 success: true, 
                 channelInfo: activeBot.getChannelInfo(),
                 liveStatus: activeBot.getLiveStatus()
+            }));
+            
+            // 현재 설정 상태도 바로 전송 (동기화)
+            ws.send(JSON.stringify({
+                type: 'settingsUpdate',
+                payload: activeBot.settings
             }));
         }
         

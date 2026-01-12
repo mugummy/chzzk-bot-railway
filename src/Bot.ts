@@ -125,9 +125,11 @@ export class ChatBot {
     }
     
     public updateSettings(newSettings: Partial<BotSettings>) { 
+        console.log('[Bot] Updating settings:', newSettings);
         if(this.settingsManager) {
             this.settingsManager.updateSettings(newSettings); 
             this.settings = this.settingsManager.getSettings(); 
+            console.log('[Bot] New settings state:', this.settings);
             this.saveAllData(); 
         }
     }
