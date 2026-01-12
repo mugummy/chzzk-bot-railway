@@ -1,6 +1,7 @@
 import { ChatEvent, ChzzkChat } from 'chzzk';
 import { ChatBot } from './Bot';
 import { VariableProcessor } from './VariableProcessor';
+import { DataManager } from './DataManager';
 
 export interface Participant {
     userIdHash: string;
@@ -151,6 +152,10 @@ export class ParticipationManager {
 
             this.participants.push(participantWithTime);
             console.log(`[ParticipationManager] User directly added to participants: ${user.nickname} (session: ${sessionCount + 1}, total: ${totalCount + 1})`);
+            
+            // DB 기록 저장
+            DataManager.saveParticipationHistory(this.bot.getChannelId(), user.userIdHash, user.nickname);
+            
             this.notifyStateChange();
             return { success: true, message: "참여자로 등록되었습니다." };
         } else {
@@ -216,6 +221,10 @@ export class ParticipationManager {
         this.participants.push(user);
 
         console.log(`[ParticipationManager] User moved to participants: ${user.nickname} (session: ${sessionCount + 1}, total: ${totalCount + 1})`);
+        
+        // DB 기록 저장
+        DataManager.saveParticipationHistory(this.bot.getChannelId(), user.userIdHash, user.nickname);
+
         this.notifyStateChange();
         return { success: true, message: "참여자로 이동했습니다." };
     }

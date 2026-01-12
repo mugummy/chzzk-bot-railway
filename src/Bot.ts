@@ -126,6 +126,22 @@ export class ChatBot {
     
     public updateSettings(newSettings: Partial<BotSettings>) { 
         console.log('[Bot] Updating settings:', newSettings);
+        
+        // 채팅 활성화/비활성화 알림
+        if (newSettings.chatEnabled !== undefined && this.settings.chatEnabled !== newSettings.chatEnabled) {
+            const isEnabled = newSettings.chatEnabled;
+            const msg = isEnabled ? '🤖 봇이 활성화되었습니다!' : '👋 봇이 비활성화되었습니다.';
+            
+            if (this.chat && this.isConnected()) {
+                // 비활성화될 때는 sendChat이 막히므로 직접 호출
+                if (isEnabled) {
+                    this.sendChat(msg);
+                } else {
+                    try { this.chat.sendChat(msg); } catch (e) {}
+                }
+            }
+        }
+
         if(this.settingsManager) {
             this.settingsManager.updateSettings(newSettings); 
             this.settings = this.settingsManager.getSettings(); 
@@ -235,6 +251,9 @@ export class ChatBot {
         });
 
         this.chat.on('chat', async (chat: ChatEvent) => {
+            // 봇 비활성화 시 반응 안 함
+            if (!this.settings.chatEnabled) return;
+
             if (this.onChatCallback) {
                 this.onChatCallback(chat);
             }
@@ -245,7 +264,11 @@ export class ChatBot {
             if (!msg) return;
 
             this.pointManager?.awardPoints(chat, this.settings);
+            
+            // DrawManager와 VoteManager는 설정된 키워드나 상태에 따라 반응하므로 항상 호출
             this.drawManager?.handleChat(chat);
+            // VoteManager의 숫자 투표는 메시지 전체가 숫자인 경우 등을 처리하므로 호출
+            this.voteManager?.handleChat(chat);
 
             if (msg[0] === '!') {
                 const firstWord = msg.split(' ')[0];

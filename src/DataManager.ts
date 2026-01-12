@@ -185,11 +185,16 @@ export class DataManager {
             user_id_hash: hash,
             nickname: p.nickname,
             amount: p.points,
-            last_chat_at: new Date(p.lastMessageTime).toISOString()
-        }));
-        
-        if (pointUpserts.length > 0) {
-            await supabase.from('points').upsert(pointUpserts);
-        }
+            last_chat_at: new Date().toISOString()
+        });
+    }
+
+    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
+        await supabase.from('participation_history').insert({
+            channel_id: channelId,
+            user_id_hash: userIdHash,
+            nickname: nickname,
+            joined_at: new Date().toISOString()
+        });
     }
 }
