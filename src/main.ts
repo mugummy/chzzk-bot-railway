@@ -95,8 +95,15 @@ app.post('/auth/logout', async (req, res) => {
 });
 
 wss.on('connection', async (ws, req) => {
+    // 1. URL 쿼리 파라미터에서 토큰 확인
+    const url = new URL(req.url || '', `http://${req.headers.host}`);
+    const tokenParam = url.searchParams.get('token');
+
+    // 2. 쿠키에서 확인
     const cookieHeader = req.headers.cookie || '';
-    const sessionId = cookieHeader.split(';').find(c => c.trim().startsWith('chzzk_session='))?.split('=')[1];
+    const cookieSession = cookieHeader.split(';').find(c => c.trim().startsWith('chzzk_session='))?.split('=')[1];
+    
+    const sessionId = tokenParam || cookieSession;
     
     if (!sessionId) {
         ws.send(JSON.stringify({ type: 'error', message: '세션이 없습니다.', requireAuth: true }));
