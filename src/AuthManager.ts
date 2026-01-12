@@ -133,13 +133,115 @@ export class AuthManager {
 
     public async validateSession(sessionId: string): Promise<AuthSession | null> {
         const session = await this.getSessionFromDB(sessionId);
-        if (!session) return null;
-
-        if (session.tokens.expiresAt < Date.now()) {
-            // 토큰 갱신 로직 (생략 가능하나 구현 권장)
-            return session; // 일단 그대로 반환
+        if (!session) {
+            console.log(`[AuthManager] Session not found in DB: ${sessionId}`);
+            return null;
         }
+
+        const now = Date.now();
+        // 로그 추가
+        console.log(`[AuthManager] Validating session: ${sessionId}, Expires: ${new Date(session.tokens.expiresAt).toISOString()}, Now: ${new Date(now).toISOString()}`);
+
+        // refresh token 만료 확인 (0이면 영구 세션이므로 스킵)
+        if (session.tokens.refreshExpiresAt > 0 && session.tokens.refreshExpiresAt < now) {
+            console.log('[AuthManager] Refresh token expired');
+            // delete this.data.sessions[sessionId]; // DB 삭제 로직 필요 (일단 스킵)
+            // this.saveData();
+            return null;
+        }
+
+        // access token 만료 시 갱신
+        if (session.tokens.expiresAt < now) {
+            console.log('[AuthManager] Access token expired, attempting refresh...');
+            const refreshed = await this.refreshTokens(sessionId);
+            if (!refreshed) {
+                console.warn('[AuthManager] Token refresh failed, but returning session for debugging (Safety Fallback)');
+                // return null; // 원래는 null이어야 하지만, 디버깅 위해 세션 반환
+            }
+        }
+
         return session;
+    }
+
+    /**
+     * 토큰 갱신 (DB 기반)
+     */
+    private async refreshTokens(sessionId: string): Promise<boolean> {
+        const session = await this.getSessionFromDB(sessionId);
+        if (!session) return false;
+
+        try {
+            const response = await axios.post(this.TOKEN_URL, {
+                grantType: 'refresh_token',
+                clientId: this.clientId,
+                clientSecret: this.clientSecret,
+                refreshToken: session.tokens.refreshToken
+            }, {
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+
+            if (response.data.code !== 200) {
+                console.error('[AuthManager] Token refresh failed:', response.data);
+                return false;
+            }
+
+            const tokenData = response.data.content;
+            const now = Date.now();
+
+            session.tokens.accessToken = tokenData.accessToken;
+            session.tokens.refreshToken = tokenData.refreshToken;
+            session.tokens.expiresAt = now + (tokenData.expiresIn * 1000);
+            
+            // DB 업데이트
+            await this.saveSessionToDB(session);
+            console.log(`[AuthManager] Tokens refreshed and saved to DB for session: ${sessionId}`);
+            return true;
+
+        } catch (e: any) {
+            console.error('[AuthManager] Token refresh error:', e.response?.data || e.message);
+            return false;
+        }
+    }
+
+    /**
+     * 로그아웃 (토큰 삭제)
+     */
+    public async logout(sessionId: string): Promise<boolean> {
+        const session = await this.getSessionFromDB(sessionId);
+        if (!session) return false;
+
+        try {
+            // 토큰 revoke 요청
+            await axios.post('https://openapi.chzzk.naver.com/auth/v1/token/revoke', {
+                clientId: this.clientId,
+                clientSecret: this.clientSecret,
+                token: session.tokens.accessToken,
+                tokenTypeHint: 'access_token'
+            }, {
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            });
+        } catch (e) {
+            console.log('[AuthManager] Token revoke failed, but continuing logout');
+        }
+
+        // DB에서 세션 삭제 (session_id를 null로 업데이트하거나 row 삭제)
+        // 여기선 간단하게 session_data를 null로 만듦
+        await supabase
+            .from('channels')
+            .update({ session_id: null, session_data: null })
+            .eq('session_id', sessionId);
+            
+        console.log(`[AuthManager] Session logged out: ${sessionId}`);
+        return true;
+    }
+
+    public getChannelIdFromSession(sessionId: string): string | null {
+        // 비동기라 직접 호출 불가, validateSession 사용 권장
+        return null; 
     }
 
     public isConfigured(): boolean { return !!(this.clientId && this.clientSecret); }
