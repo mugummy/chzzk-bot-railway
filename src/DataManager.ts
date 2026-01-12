@@ -9,14 +9,12 @@ import { Participant } from "./ParticipationManager";
 import { DrawSession } from "./DrawManager";
 import { RouletteSession } from "./RouletteManager";
 
-// ... (Interface definitions remain similar, but adapted for DB)
-
 export interface BotData {
     points: UserPoints;
-    votes: any[]; // Votes are usually transient or session-based
+    votes: any[];
     participants: any;
     counters: Counter[];
-    macros: any[]; // Changed type to match DB structure if needed
+    macros: any[];
     settings: BotSettings;
     songQueue: Song[];
     currentSong: Song | null;
@@ -70,7 +68,7 @@ export class DataManager {
             });
         }
 
-        // ... (중략: commands, macros, counters, points 매핑) ...
+        // 데이터 매핑
         const commands: Command[] = (commandsRes.data || []).map(c => ({
             id: c.id,
             triggers: c.triggers,
@@ -104,6 +102,13 @@ export class DataManager {
             };
         });
 
+        // 참여왕 랭킹 데이터 로드 (집계)
+        // loadParticipationHistory는 별도 호출 필요 없음 (ParticipationManager에서 필요시 로드하거나, 여기서 미리 로드해서 넘겨줄 수도 있음)
+        // 여기서는 userParticipationHistory가 participation_data JSONB 안에 이미 포함되어 있다고 가정하거나,
+        // 필요하다면 별도로 로드해서 병합해야 함.
+        // 현재 구조상 JSONB에 저장된 userParticipationHistory를 우선 사용하고,
+        // 나중에 participation_history 테이블에서 재집계하는 기능은 옵션으로 둠.
+
         return {
             settings,
             overlaySettings,
@@ -126,7 +131,48 @@ export class DataManager {
         };
     }
 
-    // ... (중략) ...
+    static async saveSettings(channelId: string, settings: BotSettings) {
+        await supabase.from('channels').upsert({
+            channel_id: channelId,
+            settings: settings,
+            updated_at: new Date().toISOString()
+        });
+    }
+
+    static async savePoint(channelId: string, userIdHash: string, nickname: string, amount: number) {
+        await supabase.from('points').upsert({
+            channel_id: channelId,
+            user_id_hash: userIdHash,
+            nickname: nickname,
+            amount: amount,
+            last_chat_at: new Date().toISOString()
+        });
+    }
+
+    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
+        await supabase.from('participation_history').insert({
+            channel_id: channelId,
+            user_id_hash: userIdHash,
+            nickname: nickname,
+            joined_at: new Date().toISOString()
+        });
+    }
+
+    static async loadParticipationHistory(channelId: string) {
+        const { data } = await supabase
+            .from('participation_history')
+            .select('*')
+            .eq('channel_id', channelId);
+        
+        const history: {[key: string]: number} = {};
+        if (data) {
+            data.forEach((row: any) => {
+                const key = row.user_id_hash;
+                history[key] = (history[key] || 0) + 1;
+            });
+        }
+        return history;
+    }
 
     static async saveData(channelId: string, data: BotData): Promise<void> {
         // 1. 설정 및 휘발성 데이터 저장
@@ -138,7 +184,7 @@ export class DataManager {
             overlay_settings: data.overlaySettings || {},
             song_queue: data.songQueue || [],
             current_vote: activeVote,
-            participation_data: data.participants, // 참여 데이터 저장
+            participation_data: data.participants,
             updated_at: new Date().toISOString()
         });
 
@@ -179,22 +225,17 @@ export class DataManager {
             await supabase.from('counters').insert(countersPayload);
         }
         
-        // 5. 포인트 일괄 저장 (Upsert)
+        // 5. 포인트 일괄 저장 (Upsert) - 변경된 것만 하는 게 좋지만 일단 전체
         const pointUpserts = Object.entries(data.points).map(([hash, p]) => ({
             channel_id: channelId,
             user_id_hash: hash,
             nickname: p.nickname,
             amount: p.points,
-            last_chat_at: new Date().toISOString()
-        });
-    }
-
-    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
-        await supabase.from('participation_history').insert({
-            channel_id: channelId,
-            user_id_hash: userIdHash,
-            nickname: nickname,
-            joined_at: new Date().toISOString()
-        });
+            last_chat_at: new Date(p.lastMessageTime).toISOString()
+        }));
+        
+        if (pointUpserts.length > 0) {
+            await supabase.from('points').upsert(pointUpserts);
+        }
     }
 }
