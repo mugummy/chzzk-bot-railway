@@ -16,6 +16,7 @@ const port = typeof config.port === 'string' ? parseInt(config.port) : config.po
 const authManager = new AuthManager(config.chzzk.clientId, config.chzzk.clientSecret, config.chzzk.redirectUri);
 const botManager = BotManager.getInstance();
 
+// 채팅 기록 메모리 캐시
 const channelChatHistory: Map<string, any[]> = new Map();
 
 app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentials: true }));
@@ -56,8 +57,7 @@ wss.on('connection', async (ws, req) => {
         clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
 
-    // [중요] 전체 데이터 전송 헬퍼 (초기화 및 요청 시 사용)
-    const sendFullState = (bot: any) => {
+    const sendFullState = async (bot: any) => {
         if (!bot) return;
         ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
         ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
@@ -70,9 +70,17 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
         ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
         
-        // 채팅 기록도 전송
         const history = channelChatHistory.get(channelId) || [];
         ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: history }));
+
+        // [안전 장치] 랭킹 로드 실패 시 빈 배열 전송
+        try {
+            const ranking = await DataManager.loadParticipationHistory(channelId);
+            ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
+        } catch (e) {
+            console.error('[WS] Ranking Load Error:', e);
+            ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: [] }));
+        }
     };
 
     ws.on('message', async (message) => {
@@ -81,16 +89,10 @@ wss.on('connection', async (ws, req) => {
             let bot = botManager.getBot(channelId);
 
             if (data.type === 'connect') {
-                // [수정] 봇이 없거나 준비되지 않았다면 생성 후 대기
-                if (!bot) {
-                    bot = await botManager.getOrCreateBot(channelId);
-                }
-                
-                // 봇의 데이터 로딩이 완료될 때까지 잠시 대기 (필수)
-                // (BotInstance.setup()이 완료된 상태를 보장)
+                if (!bot) bot = await botManager.getOrCreateBot(channelId);
                 
                 bot.setOnStateChangeListener((type, payload) => {
-                    bot?.saveAll(); 
+                    bot?.saveAll();
                     broadcast(type, payload);
                 });
                 
@@ -102,11 +104,6 @@ wss.on('connection', async (ws, req) => {
                     broadcast('newChat', chat);
                 });
 
-                // 랭킹 데이터 전송
-                const ranking = await DataManager.loadParticipationHistory(channelId);
-                ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
-
-                // [핵심] 연결 성공 신호와 함께 현재까지 로드된 모든 데이터를 '즉시' 전송
                 ws.send(JSON.stringify({ 
                     type: 'connectResult', 
                     success: true, 
@@ -114,7 +111,7 @@ wss.on('connection', async (ws, req) => {
                     liveStatus: bot.getLiveStatus()
                 }));
                 
-                sendFullState(bot); // 여기서 모든 목록(명령어 등)을 한 번에 밀어넣음
+                await sendFullState(bot);
                 return;
             }
 
@@ -122,8 +119,7 @@ wss.on('connection', async (ws, req) => {
 
             switch (data.type) {
                 case 'requestData':
-                    sendFullState(bot);
-                    // 라이브 정보도 갱신해서 보냄
+                    await sendFullState(bot);
                     ws.send(JSON.stringify({ 
                         type: 'connectResult', 
                         success: true, 
@@ -185,7 +181,7 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] System Error:', err); }
+        } catch (err) { console.error('[WS] Error:', err); }
     });
 
     ws.on('close', () => {
