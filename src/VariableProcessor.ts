@@ -2,13 +2,14 @@ import { ChatEvent } from 'chzzk';
 import { BotInstance } from './BotInstance';
 
 /**
- * VariableProcessor: 모든 특수 함수(/user, /since, /dday 등)를 실시간 데이터로 치환합니다.
+ * VariableProcessor: 모든 특수 함수를 실시간 데이터로 치환합니다. (개인/전체 카운트 구분)
  */
 export class VariableProcessor {
     constructor(private bot: BotInstance) {}
 
     public async process(text: string, context: { chat: ChatEvent, commandState?: any }): Promise<string> {
         let result = text;
+        const userId = context.chat.profile.userIdHash;
 
         // [1] 시청자 관련
         result = result.replace(/\/user/g, context.chat.profile.nickname);
@@ -24,16 +25,7 @@ export class VariableProcessor {
         result = result.replace(/\/category/g, live?.category || "미지정");
 
         // [3] 시간 및 기간 관련
-        if (live?.openDate) {
-            result = result.replace(/\/uptime/g, this.calculateUptime(live.openDate));
-        }
-
-        // 팔로우 기간 (/since)
-        if (context.chat.profile.badge?.imageUrl?.includes('subscribe')) {
-            result = result.replace(/\/since/g, "구독 중인 시청자"); // 실제 API 호출 필요 시 확장 가능
-        } else {
-            result = result.replace(/\/since/g, "팔로우 중");
-        }
+        if (live?.openDate) result = result.replace(/\/uptime/g, this.calculateUptime(live.openDate));
 
         // 디데이 (/dday-YYYY-MM-DD)
         const ddayMatch = result.match(/\/dday-(\d{4}-\d{2}-\d{2})/);
@@ -43,9 +35,15 @@ export class VariableProcessor {
             result = result.replace(ddayMatch[0], `${Math.abs(diff)}`);
         }
 
-        // [4] 통계 및 카운터
-        if (context.commandState?.totalCount !== undefined) {
-            result = result.replace(/\/count/g, String(context.commandState.totalCount));
+        // [4] 카운터 로직 보정 (/count vs /countall)
+        if (context.commandState) {
+            // 개인 카운트 (/count)
+            const userCount = context.commandState.userCounts?.[userId] || 0;
+            result = result.replace(/\/count/g, String(userCount));
+            
+            // 통합 카운트 (/countall)
+            const totalCount = context.commandState.totalCount || 0;
+            result = result.replace(/\/countall/g, String(totalCount));
         }
 
         // [5] 랜덤 함수 (/random)

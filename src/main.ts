@@ -7,9 +7,6 @@ import { config } from './config';
 import { AuthManager } from './AuthManager';
 import { BotManager } from './BotManager';
 
-/**
- * Main Server Hub: 모든 실시간 데이터 흐름을 통제합니다.
- */
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -22,7 +19,6 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-// 인증 체크 엔드포인트
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
     if (!token) return res.json({ authenticated: false });
@@ -45,7 +41,6 @@ wss.on('connection', async (ws, req) => {
     const url = new URL(req.url || '', `http://${req.headers.host}`);
     const token = url.searchParams.get('token');
     const session = token ? await authManager.validateSession(token) : null;
-    
     if (!session) return ws.close();
 
     const channelId = session.user.channelId;
@@ -76,7 +71,6 @@ wss.on('connection', async (ws, req) => {
 
             if (!bot) return;
 
-            // [핵심] 대시보드 액션과 서버 매니저 메서드 1:1 매칭
             switch (data.type) {
                 case 'requestData':
                     ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
@@ -87,6 +81,8 @@ wss.on('connection', async (ws, req) => {
                     ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
                     ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
                     ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
+                    ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
+                    ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
                     break;
 
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
@@ -96,27 +92,44 @@ wss.on('connection', async (ws, req) => {
                 case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
                 case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
+                case 'updateMaxParticipants': bot.participation.clearAllData(); break; // 임시: 최대인원 조절 시 초기화 로직 연동 가능
+                
+                // 추첨/룰렛/투표 액션 (완전 배선)
+                case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
+                case 'executeDraw': 
+                    const winners = bot.draw.draw(data.payload.count);
+                    if (winners.success) broadcast('drawWinnerResult', { winners: winners.winners });
+                    break;
+                case 'resetDraw': bot.draw.reset(); break;
+                
+                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
+                case 'spinRoulette': 
+                    const rWinner = bot.roulette.spin();
+                    if (rWinner) broadcast('drawWinnerResult', { winners: [{ nickname: rWinner.text, userIdHash: 'roulette' }] });
+                    break;
+                case 'resetRoulette': bot.roulette.reset(); break;
+
+                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
+                case 'startVote': bot.votes.startVote(); break;
+                case 'endVote': bot.votes.endVote(); break;
+                case 'resetVote': bot.votes.resetVote(); break;
+
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;
                 case 'clearParticipants': bot.participation.clearAllData(); break;
                 case 'updateGreetSettings': bot.greet.updateSettings(data.data); break;
                 case 'resetGreetHistory': bot.greet.clearHistory(); break;
-                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
-                case 'startVote': bot.votes.startVote(); break;
-                case 'endVote': bot.votes.endVote(); break;
-                case 'resetVote': bot.votes.resetVote(); break;
-                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break; // 보정: createRoulette 메서드명 일치
-                case 'spinRoulette': bot.roulette.spin(); break;
+                
                 case 'controlMusic':
                     if (data.action === 'skip') bot.songs.skipSong();
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] System Processing Error:', err); }
+        } catch (err) { console.error('[WS] Hub Error:', err); }
     });
 
     ws.on('close', () => clients.delete(ws));
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`🚀 System Online: Port ${port}`));
+server.listen(port, '0.0.0.0', () => console.log(`🚀 PRO BOT ONLINE: Port ${port}`));

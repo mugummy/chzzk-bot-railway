@@ -2,16 +2,14 @@ import { supabase } from "./supabase";
 import { defaultSettings } from "./SettingsManager";
 
 /**
- * DataManager: 데이터베이스와의 통신을 관리하며 정교한 저장/로드 로직을 제공합니다.
+ * DataManager: 포인트 데이터를 포함한 모든 영속성 데이터를 안전하게 관리합니다.
  */
 export class DataManager {
     private static saveQueue: Map<string, any> = new Map();
     private static saveTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
     static async loadData(channelId: string): Promise<any> {
-        console.log(`[DataManager] Atomic Asset Loading: ${channelId}`);
-
-        // 1. 모든 관련 테이블에서 데이터 병렬 추출
+        console.log(`[DataManager] Atomic Loading: ${channelId}`);
         const [chan, cmds, macs, cnts, pts] = await Promise.all([
             supabase.from('channels').select('*').eq('channel_id', channelId).single(),
             supabase.from('commands').select('*').eq('channel_id', channelId),
@@ -21,13 +19,8 @@ export class DataManager {
         ]);
 
         if (!chan.data) {
-            await supabase.from('channels').insert({ 
-                channel_id: channelId, 
-                settings: defaultSettings,
-                greet_settings: { enabled: true, type: 1, message: "반갑습니다!" },
-                greet_history: {}
-            });
-            return this.getDefaultData(channelId);
+            await supabase.from('channels').insert({ channel_id: channelId, settings: defaultSettings, greet_settings: { enabled: true, type: 1, message: "반갑습니다!" }, greet_history: {} });
+            return this.getDefault(channelId);
         }
 
         const db = chan.data;
@@ -50,21 +43,16 @@ export class DataManager {
     static async saveData(channelId: string, data: any): Promise<void> {
         this.saveQueue.set(channelId, data);
         if (this.saveTimeouts.has(channelId)) return;
-
         const timeout = setTimeout(async () => {
             this.saveTimeouts.delete(channelId);
             const latest = this.saveQueue.get(channelId);
-            if (latest) {
-                this.saveQueue.delete(channelId);
-                await this.executeActualSave(channelId, latest);
-            }
+            if (latest) { this.saveQueue.delete(channelId); await this.executeActualSave(channelId, latest); }
         }, 1000);
         this.saveTimeouts.set(channelId, timeout);
     }
 
     private static async executeActualSave(channelId: string, data: any) {
         try {
-            // 1. 채널 기본 정보 업데이트
             await supabase.from('channels').update({
                 settings: data.settings,
                 greet_settings: data.greetData.settings,
@@ -75,32 +63,32 @@ export class DataManager {
                 updated_at: new Date().toISOString()
             }).eq('channel_id', channelId);
 
-            // 2. 종속 테이블들 동기화 (원자성 확보를 위해 삭제 후 일괄 삽입)
+            // 포인트 데이터 일괄 동기화 보강
+            const pointOps = Object.entries(data.points).map(([id, p]: [string, any]) => 
+                supabase.from('points').upsert({ channel_id: channelId, user_id_hash: id, amount: p.points, nickname: p.nickname, last_chat_at: new Date(p.lastMessageTime).toISOString() })
+            );
+
             await Promise.all([
-                this.syncCommands(channelId, data.commands),
-                this.syncMacros(channelId, data.macros),
-                this.syncCounters(channelId, data.counters)
+                this.sync(channelId, 'commands', data.commands),
+                this.sync(channelId, 'macros', data.macros),
+                this.sync(channelId, 'counters', data.counters),
+                ...pointOps
             ]);
-            console.log(`[DataManager] Success: All assets persistent for ${channelId}`);
-        } catch (e) { console.error(`[DataManager] Persistence Critical Failure:`, e); }
+            console.log(`[DataManager] Full Persistence Successful for ${channelId}`);
+        } catch (e) { console.error(`[DataManager] Save Error:`, e); }
     }
 
-    private static async syncCommands(channelId: string, items: any[]) {
-        await supabase.from('commands').delete().eq('channel_id', channelId);
-        if (items.length) await supabase.from('commands').insert(items.map(i => ({ channel_id: channelId, triggers: i.triggers, response: i.response, enabled: i.enabled })));
+    private static async sync(channelId: string, table: string, items: any[]) {
+        await supabase.from(table).delete().eq('channel_id', channelId);
+        if (items.length) {
+            const payload = items.map(i => {
+                if (table === 'commands') return { channel_id: channelId, triggers: i.triggers, response: i.response, enabled: i.enabled };
+                if (table === 'macros') return { channel_id: channelId, message: i.message, interval_minutes: i.interval, enabled: i.enabled };
+                if (table === 'counters') return { channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay };
+            });
+            await supabase.from(table).insert(payload);
+        }
     }
 
-    private static async syncMacros(channelId: string, items: any[]) {
-        await supabase.from('macros').delete().eq('channel_id', channelId);
-        if (items.length) await supabase.from('macros').insert(items.map(i => ({ channel_id: channelId, message: i.message, interval_minutes: i.interval, enabled: i.enabled })));
-    }
-
-    private static async syncCounters(channelId: string, items: any[]) {
-        await supabase.from('counters').delete().eq('channel_id', channelId);
-        if (items.length) await supabase.from('counters').insert(items.map(i => ({ channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay })));
-    }
-
-    private static getDefaultData(channelId: string) {
-        return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], votes: [], participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} };
-    }
+    private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], votes: [], participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
 }
