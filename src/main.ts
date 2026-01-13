@@ -12,7 +12,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
 
-const port = parseInt(process.env.PORT || '8080', 10);
+const port = typeof config.port === 'string' ? parseInt(config.port) : config.port;
 const authManager = new AuthManager(config.chzzk.clientId, config.chzzk.clientSecret, config.chzzk.redirectUri);
 const botManager = BotManager.getInstance();
 
@@ -20,6 +20,7 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
+// 세션 검증
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
     if (!token) return res.json({ authenticated: false });
@@ -63,7 +64,6 @@ wss.on('connection', async (ws, req) => {
                 bot = await botManager.getOrCreateBot(channelId);
                 bot.setOnStateChangeListener((type, payload) => broadcast(type, payload));
                 
-                // 랭킹 데이터 전송 (참여왕 포함)
                 const ranking = await DataManager.loadParticipationHistory(channelId);
                 ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
 
@@ -87,13 +87,12 @@ wss.on('connection', async (ws, req) => {
                     ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
                     ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
                     ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
-                    ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: await DataManager.loadParticipationHistory(channelId) }));
+                    ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
+                    ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
                     break;
 
-                // CRUD 완결성: 수정(Edit) 핸들러 추가
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
-                
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
@@ -107,7 +106,6 @@ wss.on('connection', async (ws, req) => {
                     const winners = bot.draw.draw(data.payload.count);
                     if (winners.success) {
                         broadcast('drawWinnerResult', { winners: winners.winners });
-                        // 참여왕 기록
                         winners.winners.forEach(w => DataManager.saveParticipationHistory(channelId, w.userIdHash, w.nickname));
                     }
                     break;
@@ -137,10 +135,13 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] Hub Error:', err); }
+        } catch (err) { console.error('[WS] Critical Hub Error:', err); }
     });
 
-    ws.on('close', () => clients.delete(ws));
+    ws.on('close', () => {
+        clients.delete(ws);
+        if (clients.size === 0) channelClientsMap.delete(channelId);
+    });
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`🚀 PRO BOT ONLINE: Port ${port}`));
+server.listen(port, '0.0.0.0', () => console.log(`✅ System Online: Port ${port}`));
