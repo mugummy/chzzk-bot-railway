@@ -303,6 +303,29 @@ export class VoteManager {
         }
     }
 
+    public async handleChat(chat: ChatEvent): Promise<boolean> {
+        if (!this.currentVote || !this.currentVote.isActive) return false;
+
+        const message = chat.message.trim();
+        
+        // 1. '!투표 번호' 형식 체크
+        if (message.startsWith('!투표 ')) {
+            const optionId = message.split(' ')[1];
+            if (optionId) {
+                const result = this.vote(chat.profile.userIdHash, optionId, chat.profile.nickname);
+                return result.success;
+            }
+        }
+
+        // 2. 투표 진행 중일 때 메시지가 숫자만 있는 경우 자동 투표 처리 (선택 사항)
+        if (/^\d+$/.test(message)) {
+            const result = this.vote(chat.profile.userIdHash, message, chat.profile.nickname);
+            return result.success;
+        }
+
+        return false;
+    }
+
     public async handleCommand(chat: ChatEvent, chzzkChat: ChzzkChat): Promise<void> {
         const safeSendChat = (message: string) => {
             try {
