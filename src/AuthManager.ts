@@ -23,11 +23,12 @@ export interface AuthSession {
 
 /**
  * AuthManager: 치지직 OAuth2 인증 및 세션을 관리합니다.
+ * 데이터 유실 방지를 위해 기존 채널 정보를 확인 후 업데이트합니다.
  */
 export class AuthManager {
-    private readonly AUTH_URL = 'https://chzzk.naver.com/account-interlock';
     private readonly TOKEN_URL = 'https://openapi.chzzk.naver.com/auth/v1/token';
     private readonly USER_URL = 'https://openapi.chzzk.naver.com/open/v1/users/me';
+    private readonly AUTH_URL = 'https://chzzk.naver.com/account-interlock';
 
     constructor(
         private clientId: string,
@@ -35,10 +36,7 @@ export class AuthManager {
         private redirectUri: string
     ) {}
 
-    /**
-     * 네이버 로그인 URL 생성 (State 보안 포함)
-     */
-    public generateAuthUrl(redirectPath?: string) {
+    public generateAuthUrl() {
         const state = uuidv4().replace(/-/g, '').substring(0, 16);
         const params = new URLSearchParams({
             clientId: this.clientId,
@@ -48,9 +46,6 @@ export class AuthManager {
         return { url: `${this.AUTH_URL}?${params.toString()}`, state };
     }
 
-    /**
-     * 인증 코드를 토큰으로 교환하고 세션 생성
-     */
     public async exchangeCodeForTokens(code: string, state: string): Promise<{ success: boolean; session?: AuthSession; error?: string }> {
         try {
             const res = await axios.post(this.TOKEN_URL, {
@@ -76,13 +71,30 @@ export class AuthManager {
                 createdAt: Date.now()
             };
 
-            // DB에 세션 저장 (다른 데이터는 유지하고 session_id와 session_data만 업데이트)
-            await supabase.from('channels').upsert({
-                channel_id: user.channelId,
-                session_id: session.sessionId,
-                session_data: session,
-                updated_at: new Date().toISOString()
-            });
+            // [핵심] 기존 채널 데이터 존재 여부 확인
+            const { data: existing } = await supabase
+                .from('channels')
+                .select('channel_id')
+                .eq('channel_id', user.channelId)
+                .single();
+
+            if (existing) {
+                // 기존 유저: 세션 정보만 업데이트 (설정/명령어 유실 방지)
+                await supabase.from('channels').update({
+                    session_id: session.sessionId,
+                    session_data: session,
+                    updated_at: new Date().toISOString()
+                }).eq('channel_id', user.channelId);
+            } else {
+                // 신규 유저: 새로 생성
+                await supabase.from('channels').insert({
+                    channel_id: user.channelId,
+                    session_id: session.sessionId,
+                    session_data: session,
+                    settings: { chatEnabled: true },
+                    greet_settings: { enabled: true, type: 1, message: "반갑습니다!" }
+                });
+            }
 
             return { success: true, session };
         } catch (e: any) {
@@ -91,9 +103,6 @@ export class AuthManager {
         }
     }
 
-    /**
-     * 세션 토큰 유효성 검증
-     */
     public async validateSession(sessionId: string): Promise<AuthSession | null> {
         const { data, error } = await supabase
             .from('channels')
@@ -102,11 +111,7 @@ export class AuthManager {
             .single();
 
         if (error || !data || !data.session_data) return null;
-        
-        const session = data.session_data as AuthSession;
-        
-        // 토큰 만료 체크 및 갱신 로직 추가 가능
-        return session;
+        return data.session_data as AuthSession;
     }
 
     private async getUserInfo(accessToken: string): Promise<ChzzkUser | null> {
