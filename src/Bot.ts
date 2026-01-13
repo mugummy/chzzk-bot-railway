@@ -1,6 +1,6 @@
-// src/Bot.ts - Expert Controller with Greet Support
+// src/Bot.ts - Perfected Core
 
-import { ChzzkClient, ChzzkChat, ChatEvent, LiveDetail, Channel } from 'chzzk';
+import { ChzzkClient, ChzzkChat, ChatEvent, LiveDetail, Channel, DonationEvent } from 'chzzk';
 import { config } from './config';
 import { CommandManager } from './CommandManager';
 import { CounterManager } from './CounterManager';
@@ -13,7 +13,7 @@ import { SettingsManager, BotSettings, defaultSettings } from './SettingsManager
 import { VoteManager } from './VoteManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
-import { GreetManager } from './GreetManager'; // 신규
+import { GreetManager } from './GreetManager';
 
 type StateListener = () => void;
 
@@ -31,7 +31,7 @@ export class ChatBot {
     public voteManager!: VoteManager;
     public drawManager!: DrawManager;
     public rouletteManager!: RouletteManager;
-    public greetManager!: GreetManager; // 신규
+    public greetManager!: GreetManager;
     
     public settings: BotSettings = defaultSettings;
     public overlaySettings: any = {};
@@ -61,12 +61,18 @@ export class ChatBot {
         this.participationManager = new ParticipationManager(this, data.participants);
         this.songManager = new SongManager(this, data);
         this.pointManager = new PointManager(data.points);
-        this.voteManager = new VoteManager(this, data.votes);
+        
+        // VoteManager 초기화 (데이터 로드 포함)
+        this.voteManager = new VoteManager(this);
+        if (data.votes && data.votes.length > 0) {
+            this.voteManager.setCurrentVote(data.votes[0]);
+        }
+
         this.drawManager = new DrawManager(this, []);
         this.rouletteManager = new RouletteManager(this, []);
-        this.greetManager = new GreetManager(this, data.greetData); // 인사 매니저 초기화
+        this.greetManager = new GreetManager(this, data.greetData);
 
-        // Listeners
+        // Wiring Listeners
         this.participationManager.setOnStateChangeListener(() => this.notifyStateChange('participation'));
         this.songManager.setOnStateChangeListener(() => this.notifyStateChange('song'));
         this.voteManager.setOnStateChangeListener(() => this.notifyStateChange('vote'));
@@ -92,10 +98,10 @@ export class ChatBot {
             macros: this.macroManager.getMacros(),
             points: this.pointManager.getPointsData(),
             settings: this.settings,
-            votes: this.voteManager.getVotes(),
+            votes: this.voteManager.getState().currentVote ? [this.voteManager.getState().currentVote] : [],
             participants: this.participationManager.getState(),
             overlaySettings: this.overlaySettings,
-            greetData: this.greetManager.getData() // 인사 데이터 포함
+            greetData: this.greetManager.getData()
         });
     }
     
@@ -110,12 +116,6 @@ export class ChatBot {
         this.overlaySettings = { ...this.overlaySettings, ...newSettings };
         this.saveAllData();
         this.notifyStateChange('overlay');
-    }
-
-    public sendChat(message: string) { 
-        if (this.settings.chatEnabled && this.chat?.connected) { 
-            try { this.chat.sendChat(message); } catch (e) {}
-        }
     }
 
     public async connect(): Promise<void> {
@@ -135,11 +135,8 @@ export class ChatBot {
             this.macroManager.setChatClient(this.chat);
             
             this.chat.on('chat', async (chat: ChatEvent) => {
-                if (!this.settings.chatEnabled || chat.profile.userIdHash === this.botUserIdHash) return;
-                
-                // 인사 로직 실행
+                if (!this.settings.chatEnabled) return;
                 await this.greetManager.handleChat(chat, this.chat!);
-
                 this.pointManager.awardPoints(chat, this.settings);
                 this.drawManager.handleChat(chat);
                 await this.voteManager.handleChat(chat);
@@ -150,10 +147,20 @@ export class ChatBot {
                     if (cmd === '!시참') await this.participationManager.handleCommand(chat, this.chat!);
                     else if (['!노래', '!노래신청', '!대기열', '!스킵', '!현재노래', '!다음곡'].includes(cmd)) this.songManager.handleCommand(chat, this.chat!, this.settings);
                     else if (cmd === '!포인트') this.pointManager.handleCommand(chat, this.chat!, this.settings);
-                    else if (cmd === '!투표') await this.voteManager.handleCommand(chat, this.chat!);
                 }
                 if (this.commandManager.hasCommand(msg)) this.commandManager.executeCommand(chat, this.chat!);
                 else if (this.counterManager.hasCounter(msg)) this.counterManager.checkAndRespond(chat, this.chat!);
+            });
+
+            this.chat.on('donation', async (donation: DonationEvent) => {
+                await this.voteManager.handleDonation(donation);
+                const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
+                const match = donation.message?.match(youtubeUrlRegex);
+                if (match && match[0]) {
+                    try {
+                        await this.songManager?.addSongFromDonation(donation, match[0], this.settings);
+                    } catch(e) {}
+                }
             });
 
             this.chat.on('connect', async () => {
