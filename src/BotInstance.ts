@@ -37,10 +37,8 @@ export class BotInstance {
     private onChatCallback: (chat: ChatEvent) => void = () => {};
 
     constructor(private channelId: string, nidAuth: string, nidSes: string) {
-        // 쿠키 값 정제 및 접두사 제거
         const cleanAuth = (nidAuth || '').split(';')[0].replace('NID_AUTH=', '').trim();
         const cleanSes = (nidSes || '').split(';')[0].replace('NID_SES=', '').replace('NID_SESSION=', '').trim();
-
         this.client = new ChzzkClient({ nidAuth: cleanAuth, nidSession: cleanSes });
     }
 
@@ -54,22 +52,20 @@ export class BotInstance {
 
     private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
 
-    /**
-     * 안전한 채팅 전송 도우미 (로그인 안 됨 에러 방지)
-     */
-    public async safeSendChat(message: string) {
-        if (!this.isLoggedIn || !this.chat) return;
-        try {
-            await this.chat.sendChat(message);
-        } catch (e) {
-            console.error('[BotInstance] sendChat failed:', e);
-        }
-    }
-
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
 
         this.settings = new SettingsManager(data.settings);
+        
+        // [수정] 설정 변경 시 봇이 채팅으로 공지하는 로직 배선
+        this.settings.setOnStateChangeListener(() => {
+            const s = this.settings.getSettings();
+            if (this.isLoggedIn && this.chat) {
+                this.chat.sendChat(s.chatEnabled ? "🟢 gummybot 응답 기능이 활성화되었습니다." : "🔴 gummybot 응답 기능이 비활성화되었습니다.");
+            }
+            this.notify('settingsUpdate', s);
+        });
+
         this.commands = new CommandManager(this as any, data.commands);
         this.counters = new CounterManager(this as any, data.counters);
         this.macros = new MacroManager(this as any, data.macros);
@@ -85,47 +81,38 @@ export class BotInstance {
         try {
             this.channel = await this.client.channel(this.channelId);
             this.liveDetail = await this.client.live.detail(this.channelId);
-            
             if (this.liveDetail?.chatChannelId) {
                 this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
-                
                 this.chat.on('chat', (chat) => this.handleChat(chat));
                 this.chat.on('donation', (donation) => this.handleDonation(donation));
-                
                 this.chat.on('connect', async () => {
                     try {
                         const self = await this.chat?.selfProfile();
                         this.botUserIdHash = self?.userIdHash || null;
                         this.isLoggedIn = true;
                         this.macros.setChatClient(this.chat!);
-                        console.log(`[BotInstance] gummybot Online: ${self?.nickname}`);
                     } catch (e) {
                         this.isLoggedIn = false;
-                        console.error('[BotInstance] Auth failure - Continuing in read-only mode');
-                        this.notify('error', '봇 로그인에 실패했습니다. 채팅 권한이 없습니다.');
+                        this.notify('error', '봇 로그인 세션이 만료되었습니다.');
                     }
                 });
-
                 await this.chat.connect();
             }
-        } catch (err) {
-            console.error('[BotInstance] Setup Exception:', err);
-        }
+        } catch (err) {}
     }
 
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
-
-        // 기록 서비스 (채팅 안 보내므로 로그인 여부 무관)
+        
+        // 데이터 기록 (항상 수행)
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
 
-        // 채팅 발송 서비스 (로그인 되어 있을 때만)
+        // 채팅 응답 (설정 시에만)
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
-            
             const msg = chat.message.trim();
             if (msg.startsWith('!')) {
                 const cmd = msg.split(' ')[0];
@@ -140,9 +127,7 @@ export class BotInstance {
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
         const match = donation.message?.match(/(?:https?:\/\/)?(?:www\.)?youtu\.?be(?:\.com\/watch\?v=|\/)([a-zA-Z0-9_-]{11})/);
-        if (this.isLoggedIn && match) { 
-            try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {} 
-        }
+        if (this.isLoggedIn && match) { try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {} }
     }
 
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "", followerCount: this.channel?.followerCount || 0 }; }
