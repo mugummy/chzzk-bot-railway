@@ -16,21 +16,20 @@ export interface Song {
 export class SongManager {
     private queue: Song[] = [];
     private currentSong: Song | null = null;
-    private isPlaying: boolean = false; // [추가] 재생/일시정지 상태 추적
+    private isPlaying: boolean = false; // [핵심] 재생 중 여부
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(private bot: BotInstance, initialData: any) {
         this.queue = initialData.songQueue || [];
         this.currentSong = initialData.currentSong || null;
-        // DB에서 이전 재생 상태를 불러올 수도 있지만, 안전을 위해 초기값은 false로 설정
     }
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
-    private notify(type: string = 'songStateUpdate') { 
-        this.onStateChangeCallback(type, this.getState());
+    private notify() { 
+        this.onStateChangeCallback('songStateUpdate', this.getState());
         this.bot.saveAll(); 
     }
 
@@ -38,7 +37,7 @@ export class SongManager {
         return { 
             queue: this.queue, 
             currentSong: this.currentSong,
-            isPlaying: this.isPlaying 
+            isPlaying: this.isPlaying // 대시보드와 플레이어에 재생 상태 전달
         }; 
     }
 
@@ -48,16 +47,14 @@ export class SongManager {
         const cmd = parts[0];
         const subCmd = parts[1];
 
-        if (cmd !== '!노래') return;
-        if (settings.songRequestMode === 'off') return;
+        if (cmd !== '!노래' || settings.songRequestMode === 'off') return;
 
         if (!subCmd || subCmd === '도움말') {
-            return chzzkChat.sendChat('🎵 [명령어] !노래 신청 [링크], !노래 스킵, !노래 대기열');
+            return chzzkChat.sendChat('🎵 [명령어] !노래 신청 [링크], !노래 스킵, !노래 대기열, !노래 현재');
         }
 
         if (subCmd === '신청') {
             if (settings.songRequestMode === 'donation') return chzzkChat.sendChat(`💸 후원으로만 신청 가능합니다.`);
-            
             const query = parts.slice(2).join(' ');
             if (!this.isValidYoutubeLink(query)) return chzzkChat.sendChat('❌ 올바른 링크를 입력하세요.');
 
@@ -65,13 +62,8 @@ export class SongManager {
                 const song = await this.fetchSongInfo(query, chat.profile.nickname);
                 this.queue.push(song);
                 chzzkChat.sendChat(`✅ 추가됨: ${song.title}`);
-                
-                // [수정] 현재 재생 중인 곡이 없다면 즉시 재생 시작
-                if (!this.currentSong) {
-                    this.playNext();
-                } else {
-                    this.notify();
-                }
+                if (!this.currentSong) this.playNext();
+                else this.notify();
             } catch (err) { chzzkChat.sendChat('❌ 정보를 가져올 수 없습니다.'); }
         } 
         else if (subCmd === '스킵') {
@@ -106,19 +98,13 @@ export class SongManager {
 
     private async fetchSongInfo(videoId: string, requester: string): Promise<Song> {
         const info = await ytdl.getBasicInfo(videoId);
-        return {
-            videoId,
-            title: info.videoDetails.title,
-            thumbnail: info.videoDetails.thumbnails[0]?.url,
-            requester,
-            requestedAt: Date.now()
-        };
+        return { videoId, title: info.videoDetails.title, thumbnail: info.videoDetails.thumbnails[0]?.url, requester, requestedAt: Date.now() };
     }
 
     public playNext() {
         if (this.queue.length > 0) {
             this.currentSong = this.queue.shift() || null;
-            this.isPlaying = true; // 새 곡 시작 시 무조건 재생 상태
+            this.isPlaying = true;
             this.notify();
         } else {
             this.currentSong = null;
@@ -136,11 +122,9 @@ export class SongManager {
         }
     }
 
-    // [중요] 대시보드 버튼과 플레이어를 이어주는 핵심 로직
+    // [수정] 재생/일시정지 상태 토글
     public togglePlayPause() {
         this.isPlaying = !this.isPlaying;
-        // 플레이어에게 직접 재생/일시정지 명령을 내리기 위해 별도 타입 전송
-        this.onStateChangeCallback('playerControl', { action: this.isPlaying ? 'play' : 'pause' });
         this.notify();
     }
 
