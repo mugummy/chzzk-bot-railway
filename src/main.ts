@@ -73,9 +73,15 @@ wss.on('connection', async (ws, req) => {
                     bot.setOnStateChangeListener('song', () => broadcast({ type: 'songStateUpdate', payload: bot!.songManager.getState() }));
                     bot.setOnStateChangeListener('settings', () => broadcast({ type: 'settingsUpdate', payload: bot!.settings }));
                     bot.setOnStateChangeListener('overlay', () => broadcast({ type: 'overlaySettingsUpdate', payload: bot!.overlaySettings }));
-                    bot.setOnStateChangeListener('participation', () => broadcast({ type: 'participationStateUpdate', payload: bot!.participationManager.getState() }));
-                    bot.setOnChatListener((chat) => broadcast({ type: 'newChat', payload: chat }));
-                }
+                                    bot.setOnStateChangeListener('participation', () => broadcast({ type: 'participationStateUpdate', payload: bot!.participationManager.getState() }));
+                                    bot.setOnStateChangeListener('points', () => broadcast({ type: 'pointsUpdate', payload: bot!.pointManager.getPointsData() }));
+                                    
+                                    // 추가된 리스너들
+                                    bot.setOnStateChangeListener('commands', () => broadcast({ type: 'commandsUpdate', payload: bot!.commandManager.getCommands() }));
+                                    bot.setOnStateChangeListener('macros', () => broadcast({ type: 'macrosUpdate', payload: bot!.macroManager.getMacros() }));
+                                    bot.setOnStateChangeListener('counters', () => broadcast({ type: 'countersUpdate', payload: bot!.counterManager.getCounters() }));
+                                    
+                                    bot.setOnChatListener((chat) => broadcast({ type: 'newChat', payload: chat }));                }
                 ws.send(JSON.stringify({ type: 'connectResult', success: true, channelInfo: bot.getChannelInfo() }));
                 return;
             }

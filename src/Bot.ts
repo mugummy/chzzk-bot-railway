@@ -70,6 +70,13 @@ export class ChatBot {
         this.drawManager.setOnStateChangeListener(() => this.notifyStateChange('draw'));
         this.rouletteManager.setOnStateChangeListener(() => this.notifyStateChange('roulette'));
         this.pointManager.setOnStateChangeListener(() => this.notifyStateChange('points'));
+        
+        // 추가: 명령어, 매크로, 카운터 리스너 (실시간 동기화용)
+        this.commandManager.setOnStateChangeListener(() => this.notifyStateChange('commands'));
+        this.macroManager.setOnStateChangeListener(() => this.notifyStateChange('macros'));
+        this.counterManager.setOnStateChangeListener(() => this.notifyStateChange('counters'));
+        
+        console.log('[Bot] 데이터 로딩 완료.');
     }
 
     private notifyStateChange(type: string) { this.onStateChangeCallbacks[type]?.(); }
