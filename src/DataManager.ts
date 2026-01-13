@@ -175,67 +175,69 @@ export class DataManager {
     }
 
     static async saveData(channelId: string, data: BotData): Promise<void> {
-        // 1. 설정 및 휘발성 데이터 저장
-        const activeVote = data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null;
-
-        await supabase.from('channels').upsert({
-            channel_id: channelId,
-            settings: data.settings,
-            overlay_settings: data.overlaySettings || {},
-            song_queue: data.songQueue || [],
-            current_vote: activeVote,
-            participation_data: data.participants,
-            updated_at: new Date().toISOString()
-        });
-
-        // 2. 명령어 저장 (Overwrite)
-        await supabase.from('commands').delete().eq('channel_id', channelId);
-        if (data.commands && data.commands.length > 0) {
-            const commandsPayload = data.commands.map(c => ({
-                channel_id: channelId,
-                triggers: c.triggers || [c.trigger],
-                response: c.response,
-                enabled: c.enabled
-            }));
-            await supabase.from('commands').insert(commandsPayload);
-        }
-
-        // 3. 매크로 저장 (Overwrite)
-        await supabase.from('macros').delete().eq('channel_id', channelId);
-        if (data.macros && data.macros.length > 0) {
-            const macrosPayload = data.macros.map(m => ({
-                channel_id: channelId,
-                message: m.message,
-                interval_minutes: m.interval,
-                enabled: m.enabled
-            }));
-            await supabase.from('macros').insert(macrosPayload);
-        }
-
-        // 4. 카운터 저장 (Overwrite)
-        await supabase.from('counters').delete().eq('channel_id', channelId);
-        if (data.counters && data.counters.length > 0) {
-            const countersPayload = data.counters.map(c => ({
-                channel_id: channelId,
-                trigger: c.trigger,
-                response: c.response,
-                count: c.state?.totalCount || 0,
-                enabled: c.enabled
-            }));
-            await supabase.from('counters').insert(countersPayload);
-        }
+        console.log(`[DataManager] Saving all data for channel: ${channelId}...`);
         
-        // 5. 포인트 일괄 저장 (Upsert) - 변경된 것만 하는 게 좋지만 일단 전체
-        const pointUpserts = Object.entries(data.points).map(([hash, p]) => ({
-            channel_id: channelId,
-            user_id_hash: hash,
-            nickname: p.nickname,
-            amount: p.points,
-            last_chat_at: new Date(p.lastMessageTime).toISOString()
-        }));
-        
-        if (pointUpserts.length > 0) {
-            await supabase.from('points').upsert(pointUpserts);
+        try {
+            // 1. 설정 및 휘발성 데이터 저장
+            const activeVote = data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null;
+            const channelPromise = supabase.from('channels').upsert({
+                channel_id: channelId,
+                settings: data.settings,
+                overlay_settings: data.overlaySettings || {},
+                song_queue: data.songQueue || [],
+                current_vote: activeVote,
+                participation_data: data.participants,
+                updated_at: new Date().toISOString()
+            });
+
+            // 2. 명령어 저장 (Overwrite)
+            const commandsPromise = (async () => {
+                await supabase.from('commands').delete().eq('channel_id', channelId);
+                if (data.commands && data.commands.length > 0) {
+                    const payload = data.commands.map(c => ({
+                        channel_id: channelId,
+                        triggers: c.triggers || [c.trigger],
+                        response: c.response,
+                        enabled: c.enabled
+                    }));
+                    await supabase.from('commands').insert(payload);
+                }
+            })();
+
+            // 3. 매크로 저장 (Overwrite)
+            const macrosPromise = (async () => {
+                await supabase.from('macros').delete().eq('channel_id', channelId);
+                if (data.macros && data.macros.length > 0) {
+                    const payload = data.macros.map(m => ({
+                        channel_id: channelId,
+                        message: m.message,
+                        interval_minutes: m.interval,
+                        enabled: m.enabled
+                    }));
+                    await supabase.from('macros').insert(payload);
+                }
+            })();
+
+            // 4. 카운터 저장 (Overwrite)
+            const countersPromise = (async () => {
+                await supabase.from('counters').delete().eq('channel_id', channelId);
+                if (data.counters && data.counters.length > 0) {
+                    const payload = data.counters.map(c => ({
+                        channel_id: channelId,
+                        trigger: c.trigger,
+                        response: c.response,
+                        count: c.state?.totalCount || 0,
+                        enabled: c.enabled
+                    }));
+                    await supabase.from('counters').insert(payload);
+                }
+            })();
+
+            await Promise.all([channelPromise, commandsPromise, macrosPromise, countersPromise]);
+            console.log(`[DataManager] Successfully saved all data for ${channelId}`);
+        } catch (error) {
+            console.error(`[DataManager] Failed to save data for ${channelId}:`, error);
+            throw error;
         }
     }
 }

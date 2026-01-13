@@ -153,6 +153,38 @@ wss.on('connection', async (ws, req) => {
                 type: 'settingsUpdate',
                 payload: activeBot.settings
             }));
+
+            // ===== 상태 변경 리스너 연결 (UI 동기화 핵심) =====
+            const broadcast = (msg: any) => ws.send(JSON.stringify(msg));
+
+            activeBot.setOnStateChangeListener('vote', () => {
+                broadcast({ type: 'voteStateUpdate', payload: activeBot.voteManager.getState() });
+            });
+            activeBot.setOnStateChangeListener('draw', () => {
+                broadcast({ type: 'drawStateUpdate', payload: activeBot.drawManager.getState() });
+            });
+            activeBot.setOnStateChangeListener('roulette', () => {
+                broadcast({ type: 'rouletteStateUpdate', payload: activeBot.rouletteManager.getState() });
+            });
+            activeBot.setOnStateChangeListener('song', () => {
+                broadcast({ type: 'songStateUpdate', payload: activeBot.songManager.getState() });
+            });
+            activeBot.setOnStateChangeListener('participation', () => {
+                broadcast({ type: 'participationStateUpdate', payload: activeBot.participationManager.getState() });
+            });
+            activeBot.setOnStateChangeListener('points', () => {
+                broadcast({ type: 'pointsUpdate', payload: activeBot.pointManager.getPointsData() });
+            });
+            activeBot.setOnStateChangeListener('overlay', () => {
+                broadcast({ type: 'overlaySettingsUpdate', payload: activeBot.overlaySettings });
+            });
+            
+            // 초기 상태 전송
+            broadcast({ type: 'voteStateUpdate', payload: activeBot.voteManager.getState() });
+            broadcast({ type: 'drawStateUpdate', payload: activeBot.drawManager.getState() });
+            broadcast({ type: 'rouletteStateUpdate', payload: activeBot.rouletteManager.getState() });
+            broadcast({ type: 'songStateUpdate', payload: activeBot.songManager.getState() });
+            broadcast({ type: 'participationStateUpdate', payload: activeBot.participationManager.getState() });
         }
         
         // (그 외 데이터 요청 및 봇 제어 핸들러들은 activeBot을 channelBotMap에서 꺼내서 처리)
