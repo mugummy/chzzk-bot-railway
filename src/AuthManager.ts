@@ -21,10 +21,6 @@ export interface AuthSession {
     createdAt: number;
 }
 
-/**
- * AuthManager: 치지직 OAuth2 인증 및 세션을 관리합니다.
- * 데이터 유실 방지를 위해 기존 채널 정보를 확인 후 업데이트합니다.
- */
 export class AuthManager {
     private readonly TOKEN_URL = 'https://openapi.chzzk.naver.com/auth/v1/token';
     private readonly USER_URL = 'https://openapi.chzzk.naver.com/open/v1/users/me';
@@ -71,54 +67,46 @@ export class AuthManager {
                 createdAt: Date.now()
             };
 
-            // [핵심] 기존 채널 데이터 존재 여부 확인
-            const { data: existing } = await supabase
-                .from('channels')
-                .select('channel_id')
-                .eq('channel_id', user.channelId)
-                .single();
-
-            if (existing) {
-                // 기존 유저: 세션 정보만 업데이트 (설정/명령어 유실 방지)
-                await supabase.from('channels').update({
-                    session_id: session.sessionId,
-                    session_data: session,
-                    updated_at: new Date().toISOString()
-                }).eq('channel_id', user.channelId);
-            } else {
-                // 신규 유저: 새로 생성
-                await supabase.from('channels').insert({
-                    channel_id: user.channelId,
-                    session_id: session.sessionId,
-                    session_data: session,
-                    settings: { chatEnabled: true },
-                    greet_settings: { enabled: true, type: 1, message: "반갑습니다!" }
-                });
+            // DB 업데이트 시도 (실패해도 로그인 자체는 성공 처리)
+            try {
+                const { data: existing } = await supabase.from('channels').select('channel_id').eq('channel_id', user.channelId).single();
+                
+                if (existing) {
+                    await supabase.from('channels').update({
+                        session_id: session.sessionId,
+                        session_data: session,
+                        updated_at: new Date().toISOString()
+                    }).eq('channel_id', user.channelId);
+                } else {
+                    await supabase.from('channels').insert({
+                        channel_id: user.channelId,
+                        session_id: session.sessionId,
+                        session_data: session,
+                        settings: { chatEnabled: true },
+                        greet_settings: { enabled: true, type: 1, message: "반갑습니다!" }
+                    });
+                }
+            } catch (dbError) {
+                console.error('[AuthManager] DB Sync Warning:', dbError);
+                // DB 에러가 나도 세션은 유효하므로 진행
             }
 
             return { success: true, session };
         } catch (e: any) {
-            console.error('[AuthManager] Exchange Error:', e.response?.data || e.message);
+            console.error('[AuthManager] Auth Failed:', e.response?.data || e.message);
             return { success: false, error: e.message };
         }
     }
 
     public async validateSession(sessionId: string): Promise<AuthSession | null> {
-        const { data, error } = await supabase
-            .from('channels')
-            .select('session_data')
-            .eq('session_id', sessionId)
-            .single();
-
-        if (error || !data || !data.session_data) return null;
+        const { data } = await supabase.from('channels').select('session_data').eq('session_id', sessionId).single();
+        if (!data || !data.session_data) return null;
         return data.session_data as AuthSession;
     }
 
     private async getUserInfo(accessToken: string): Promise<ChzzkUser | null> {
         try {
-            const res = await axios.get(this.USER_URL, {
-                headers: { 'Authorization': `Bearer ${accessToken}` }
-            });
+            const res = await axios.get(this.USER_URL, { headers: { 'Authorization': `Bearer ${accessToken}` } });
             const content = res.data.content;
             return {
                 channelId: content.channelId,
