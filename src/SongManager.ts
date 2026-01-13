@@ -1,5 +1,5 @@
 import { ChatEvent, ChzzkChat, DonationEvent } from 'chzzk';
-import ytdl from 'ytdl-core';
+import ytdl from '@distube/ytdl-core';
 import { BotInstance } from './BotInstance';
 
 export interface Song {
