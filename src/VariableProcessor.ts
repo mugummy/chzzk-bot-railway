@@ -1,202 +1,74 @@
 import { ChatEvent } from 'chzzk';
-import { ChatBot } from './Bot';
-import { Command } from './CommandManager';
-import { Counter } from './CounterManager';
+import { BotInstance } from './BotInstance';
 
-interface ProcessContext {
-    chat?: ChatEvent;
-    commandState?: Command['state'] | Counter['state'];
-}
-
+/**
+ * VariableProcessor: 명령어 내의 특수 변수들을 실시간 데이터로 치환합니다.
+ */
 export class VariableProcessor {
-    private bot: ChatBot;
+    constructor(private bot: BotInstance) {}
 
-    constructor(bot: ChatBot) {
-        this.bot = bot;
-    }
+    /**
+     * 응답 메시지 내의 모든 변수를 실제 값으로 변환
+     */
+    public async process(text: string, context: { chat: ChatEvent, commandState?: any }): Promise<string> {
+        let result = text;
 
-    private formatUptime(startTime: string | undefined): string {
-        if (!startTime) return 'N/A';
-        const start = new Date(startTime).getTime();
-        const now = Date.now();
-        let delta = Math.floor((now - start) / 1000);
+        // 1. 시청자 정보 (/user)
+        result = result.replace(/\/user/g, context.chat.profile.nickname);
 
-        const days = Math.floor(delta / 86400);
-        delta -= days * 86400;
-        const hours = Math.floor(delta / 3600) % 24;
-        delta -= hours * 3600;
-        const minutes = Math.floor(delta / 60) % 60;
+        // 2. 채널 정보 (/channel)
+        result = result.replace(/\/channel/g, context.chat.profile.nickname); // 기본값
 
-        let result = '';
-        if (days > 0) result += `${days}일 `;
-        if (hours > 0) result += `${hours}시간 `;
-        if (minutes > 0) result += `${minutes}분`;
-        return result.trim() || '방금';
-    }
-
-    public async process(text: string, context: ProcessContext = {}): Promise<string> {
-        let processedText = text;
-        const { chat, commandState } = context;
-        const { liveDetail, channel } = this.bot;
-
-        // Simple replacements from bot state
-        if (chat) {
-            processedText = processedText.replace(/{user}/g, chat.profile.nickname);
-        }
-        if (channel) {
-            processedText = processedText.replace(/{channel}/g, channel.channelName);
-            processedText = processedText.replace(/{follower}/g, channel.followerCount.toLocaleString());
-        }
-        if (liveDetail) {
-            processedText = processedText.replace(/{title}/g, liveDetail.liveTitle);
-            processedText = processedText.replace(/{category}/g, liveDetail.liveCategoryValue || '카테고리 없음');
-            processedText = processedText.replace(/{viewer}/g, liveDetail.concurrentUserCount.toLocaleString());
-            processedText = processedText.replace(/{uptime}/g, this.formatUptime(liveDetail.openDate));
-        }
-
-        const now = new Date();
-        const year = now.getFullYear();
-        const month = String(now.getMonth() + 1).padStart(2, '0');
-        const day = String(now.getDate()).padStart(2, '0');
-        const hour = String(now.getHours()).padStart(2, '0');
-        const minute = String(now.getMinutes()).padStart(2, '0');
-        const second = String(now.getSeconds()).padStart(2, '0');
-
-        processedText = processedText.replace(/{date}/g, `${year}-${month}-${day}`);
-        processedText = processedText.replace(/{time}/g, `${hour}:${minute}:${second}`);
-
-        // {dday-YYYY-MM-DD}
-        processedText = processedText.replace(/{dday-(\d{4}-\d{2}-\d{2})}/g, (match, dateStr) => {
-            const targetDate = new Date(dateStr);
-            if (isNaN(targetDate.getTime())) return '날짜 형식 오류';
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-            targetDate.setHours(0, 0, 0, 0);
-            const diffTime = targetDate.getTime() - today.getTime();
-            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-            
-            if (diffDays === 0) return 'D-Day';
-            return diffDays > 0 ? `D-${diffDays}` : `D+${Math.abs(diffDays)}`;
-        });
-
-        // Functional replacements with parameters
-        // {random(min,max)}
-        processedText = processedText.replace(/{random\((\d+),(\d+)\)}/g, (match, min, max) => {
-            const minNum = parseInt(min, 10);
-            const maxNum = parseInt(max, 10);
-            return (Math.floor(Math.random() * (maxNum - minNum + 1)) + minNum).toString();
-        });
-
-        // {any(item1,item2,...)}
-        processedText = processedText.replace(/{any\(([^)]+)\)}/g, (match, items) => {
-            const options = items.split(',').map((s: string) => s.trim());
-            return options[Math.floor(Math.random() * options.length)];
-        });
-
-        if (processedText.includes('{since}')) {
-            let startDateStr: string | undefined;
-            if (chat) {
-                if (chat.profile.userRoleCode === 'streamer') {
-                    // 스트리머 본인인 경우, 현재 시간으로 설정하여 0초로 만듦
-                    startDateStr = new Date().toISOString();
-                } else if (this.bot.chat) { // Ensure chat client is available
-                    try {
-                        // 치지직 채팅 클라이언트를 통해 사용자 프로필 조회
-                        const userProfile = await this.bot.chat.profile(chat.profile.userIdHash);
-                        startDateStr = userProfile.streamingProperty?.following?.followDate;
-                    } catch (e) {
-                        console.error('Error fetching user profile for {since}:', e);
-                    }
-                } else {
-                    console.warn('Chat client not available for {since} function.');
-                }
+        // 3. 방송 상태 정보 (봇 인스턴스에서 실시간 데이터 가져오기)
+        try {
+            // 업타임 (/uptime)
+            const liveDetail = (this.bot as any).liveDetail; // BotInstance의 liveDetail 참조
+            if (liveDetail && liveDetail.openDate) {
+                const uptime = this.calculateUptime(liveDetail.openDate);
+                result = result.replace(/\/uptime/g, uptime);
             }
 
-            let resultText = '팔로우 정보 없음';
-            if (startDateStr) {
-                const startDate = new Date(startDateStr);
-                if (!isNaN(startDate.getTime())) {
-                    const now = new Date();
-                    let diffSeconds = Math.floor((now.getTime() - startDate.getTime()) / 1000);
+            // 시청자 수 (/viewer)
+            const viewers = liveDetail?.concurrentUserCount?.toLocaleString() || "0";
+            result = result.replace(/\/viewer/g, viewers);
 
-                    if (diffSeconds < 0) diffSeconds = 0; // 미래 시간 방지
+            // 방송 제목 (/title)
+            result = result.replace(/\/title/g, liveDetail?.liveTitle || "제목 없음");
 
-                    const years = Math.floor(diffSeconds / (365 * 24 * 60 * 60));
-                    diffSeconds -= years * (365 * 24 * 60 * 60);
-                    const months = Math.floor(diffSeconds / (30 * 24 * 60 * 60)); // 대략적인 월 계산
-                    diffSeconds -= months * (30 * 24 * 60 * 60);
-                    const days = Math.floor(diffSeconds / (24 * 60 * 60));
-                    diffSeconds -= days * (24 * 60 * 60);
-                    const hours = Math.floor(diffSeconds / (60 * 60));
-                    diffSeconds -= hours * (60 * 60);
-                    const minutes = Math.floor(diffSeconds / 60);
-                    diffSeconds -= minutes * 60;
-                    const seconds = diffSeconds;
-
-                    let result = '';
-                    if (years > 0) result += `${years}년 `;
-                    if (months > 0) result += `${months}개월 `;
-                    if (days > 0) result += `${days}일 `;
-                    if (hours > 0) result += `${hours}시간 `;
-                    if (minutes > 0) result += `${minutes}분 `;
-                    if (seconds > 0) result += `${seconds}초`;
-                    
-                    resultText = result.trim() || '방금';
-                }
-            }
-            processedText = processedText.replace(/{since}/g, resultText);
+            // 카테고리 (/category)
+            result = result.replace(/\/category/g, liveDetail?.category || "미지정");
+        } catch (e) {
+            console.warn('[VariableProcessor] Live data fetch failed:', e);
         }
 
-        // {editor}
-        if (commandState && 'editorValue' in commandState && commandState.editorValue !== undefined) {
-            processedText = processedText.replace(/{editor}/g, commandState.editorValue || '');
+        // 4. 카운터 정보 (/count)
+        if (context.commandState && context.commandState.totalCount !== undefined) {
+            result = result.replace(/\/count/g, String(context.commandState.totalCount));
         }
 
-        // Custom internal variables (not on frontend list but useful)
-        if (commandState?.totalCount !== undefined) {
-            processedText = processedText.replace(/{total_count}/g, commandState.totalCount.toString());
-            processedText = processedText.replace(/{countall}/g, commandState.totalCount.toString()); // Add countall
-        }
-        if (chat?.profile?.userIdHash && commandState?.userCounts?.[chat.profile.userIdHash] !== undefined) {
-            processedText = processedText.replace(/{user_count}/g, commandState.userCounts[chat.profile.userIdHash].toString());
-            processedText = processedText.replace(/{count}/g, commandState.userCounts[chat.profile.userIdHash].toString()); // Add count
-        }
-        if (chat?.profile?.userIdHash && processedText.includes('{points}')) {
-            const userPoints = this.bot.pointManager.getPointsData()[chat.profile.userIdHash]?.points || 0;
-            processedText = processedText.replace(/{points}/g, userPoints.toLocaleString());
-        }
-        if (processedText.includes('{song}')) {
-            const currentSong = this.bot.songManager.getCurrentSong();
-            processedText = processedText.replace(/{song}/g, currentSong ? currentSong.title : '현재 재생중인 노래가 없습니다.');
-        }
-        if (processedText.includes('{requester}')) {
-            const currentSong = this.bot.songManager.getCurrentSong();
-            processedText = processedText.replace(/{requester}/g, currentSong ? currentSong.requester : '신청자가 없습니다.');
-        }
-        if (processedText.includes('{queue}')) {
-            const queue = this.bot.songManager.getQueue();
-            processedText = processedText.replace(/{queue}/g, queue.length > 0 ? queue.map(s => s.title).join(', ') : '대기열이 비어있습니다.');
+        // 5. 랜덤 선택 (/random)
+        // 형식: "치킨/random피자/random떡볶이" 중 하나 선택
+        if (result.includes('/random')) {
+            const parts = result.split('/random');
+            result = parts[Math.floor(Math.random() * parts.length)].trim();
         }
 
-        // {else(item1,item2,...)}
-        processedText = processedText.replace(/{else\(([^)]+)\)}/g, (match, items) => {
-            const options = items.split(',').map((s: string) => s.trim());
-            return options[Math.floor(Math.random() * options.length)];
-        });
+        return result;
+    }
+
+    private calculateUptime(openDateStr: string): string {
+        const openDate = new Date(openDateStr).getTime();
+        const diff = Date.now() - openDate;
+
+        const hours = Math.floor(diff / (1000 * 60 * 60));
+        const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+        const secs = Math.floor((diff % (1000 * 60)) / 1000);
+
+        let str = "";
+        if (hours > 0) str += `${hours}시간 `;
+        if (mins > 0) str += `${mins}분 `;
+        str += `${secs}초`;
         
-        // {help} - must be last as it might contain other variables
-        if (processedText.includes('{help}')) {
-            const commandList = this.bot.commandManager.getCommands()
-                .map(c => {
-                    const triggers = c.triggers || (c.trigger ? [c.trigger] : []);
-                    return triggers[0] || 'unknown';
-                })
-                .filter(trigger => trigger !== 'unknown')
-                .join(', ');
-            const helpText = `사용 가능한 명령어: ${commandList}`;
-            processedText = processedText.replace(/{help}/g, helpText);
-        }
-
-        return processedText;
+        return str;
     }
 }

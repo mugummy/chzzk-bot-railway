@@ -1,183 +1,75 @@
-import { WebSocketServer } from 'ws';
-import { supabase, User, BotSettings, BotSession } from './supabase';
 import { BotInstance } from './BotInstance';
+import { config } from './config';
 
+/**
+ * BotManager: 서버에서 가동 중인 모든 봇 인스턴스를 관리합니다. (Singleton)
+ * 채널별로 하나의 봇만 존재하도록 보장하며, 리소스를 효율적으로 분배합니다.
+ */
 export class BotManager {
-  private bots: Map<string, BotInstance> = new Map();
-  private pollInterval: number;
-  private pollTimer: NodeJS.Timeout | null = null;
-  private isRunning: boolean = false;
-  private wss: WebSocketServer;
-  private broadcastFunction: ((userId: string, data: any) => void) | null = null;
+    private static instance: BotManager;
+    private bots: Map<string, BotInstance> = new Map();
 
-  constructor(wss: WebSocketServer) {
-    this.wss = wss;
-    this.pollInterval = parseInt(process.env.POLL_INTERVAL || '5000');
-  }
+    private constructor() {}
 
-  setBroadcastFunction(fn: (userId: string, data: any) => void) {
-    this.broadcastFunction = fn;
-  }
-
-  async start(): Promise<void> {
-    console.log('[BotManager] Starting...');
-    this.isRunning = true;
-
-    // 초기 로드
-    await this.syncBots();
-
-    // 주기적으로 동기화
-    this.pollTimer = setInterval(() => {
-      this.syncBots().catch(err => {
-        console.error('[BotManager] Sync error:', err.message);
-      });
-    }, this.pollInterval);
-
-    console.log(`[BotManager] Polling every ${this.pollInterval}ms`);
-  }
-
-  async stop(): Promise<void> {
-    console.log('[BotManager] Stopping...');
-    this.isRunning = false;
-
-    if (this.pollTimer) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-
-    // 모든 봇 종료
-    for (const [userId, bot] of this.bots) {
-      console.log(`[BotManager] Stopping bot for user ${userId}`);
-      await bot.disconnect();
-    }
-    this.bots.clear();
-  }
-
-  private async syncBots(): Promise<void> {
-    try {
-      // 활성 세션 가져오기 (users를 통해 조인)
-      const { data: sessions, error } = await supabase
-        .from('bot_sessions')
-        .select(`
-          *,
-          users!inner (
-            id,
-            chzzk_id,
-            channel_id,
-            channel_name
-          )
-        `)
-        .eq('is_active', true);
-
-      if (error) {
-        console.error('[BotManager] Failed to fetch sessions:', error.message);
-        return;
-      }
-
-      const activeSessions = sessions || [];
-      const activeUserIds = new Set(activeSessions.map((s: any) => s.user_id));
-
-      // 비활성화된 봇 종료
-      for (const [userId, bot] of this.bots) {
-        if (!activeUserIds.has(userId)) {
-          console.log(`[BotManager] Stopping inactive bot for user ${userId}`);
-          await bot.disconnect();
-          this.bots.delete(userId);
-
-          // 클라이언트에 알림
-          if (this.broadcastFunction) {
-            this.broadcastFunction(userId, { type: 'botStatus', payload: { connected: false } });
-          }
+    public static getInstance(): BotManager {
+        if (!BotManager.instance) {
+            BotManager.instance = new BotManager();
         }
-      }
+        return BotManager.instance;
+    }
 
-      // 새 봇 시작
-      for (const session of activeSessions) {
-        const userId = session.user_id;
-        const user = session.users as User;
+    /**
+     * 특정 채널의 봇을 가동하거나 가져옵니다.
+     */
+    public async getOrCreateBot(channelId: string): Promise<BotInstance> {
+        let bot = this.bots.get(channelId);
 
-        // bot_settings 별도 조회
-        const { data: settingsData } = await supabase
-          .from('bot_settings')
-          .select('*')
-          .eq('user_id', userId)
-          .single();
-
-        const settings = settingsData as BotSettings || {
-          prefix: '!',
-          points_enabled: true,
-          points_per_chat: 10,
-          points_name: '포인트',
-          points_cooldown: 60,
-          song_request_enabled: true,
-          song_request_mode: 'cooldown',
-          song_request_cooldown: 300,
-          song_request_min_donation: 1000,
-        };
-
-        if (!this.bots.has(userId)) {
-          console.log(`[BotManager] Starting bot for user ${userId} (${user.channel_name})`);
-
-          try {
-            const bot = new BotInstance({
-              userId,
-              channelId: user.channel_id,
-              settings,
-            });
-
-            // 상태 변경 리스너 설정
-            bot.setOnStateChangeListener((type, data) => {
-              if (this.broadcastFunction) {
-                this.broadcastFunction(userId, { type, payload: data });
-              }
-            });
-
-            await bot.connect();
-            this.bots.set(userId, bot);
-            console.log(`[BotManager] Bot started for ${user.channel_name}`);
-
-            // 클라이언트에 알림
-            if (this.broadcastFunction) {
-              this.broadcastFunction(userId, { type: 'botStatus', payload: { connected: true } });
-            }
-          } catch (err: any) {
-            console.error(`[BotManager] Failed to start bot for ${user.channel_name}:`, err.message);
-
-            // 세션 비활성화
-            await supabase
-              .from('bot_sessions')
-              .update({
-                is_active: false,
-                error_message: err.message
-              })
-              .eq('id', session.id);
-
-            // 클라이언트에 에러 알림
-            if (this.broadcastFunction) {
-              this.broadcastFunction(userId, {
-                type: 'botError',
-                payload: { message: err.message }
-              });
-            }
-          }
+        if (!bot) {
+            console.log(`[BotManager] Starting new bot instance for: ${channelId}`);
+            bot = new BotInstance(channelId, config.chzzk.nidAuth, config.chzzk.nidSes);
+            await bot.setup();
+            this.bots.set(channelId, bot);
         }
 
-        // 하트비트 업데이트
-        await supabase
-          .from('bot_sessions')
-          .update({ last_heartbeat: new Date().toISOString() })
-          .eq('id', session.id);
-      }
-    } catch (err: any) {
-      console.error('[BotManager] Sync error:', err.message);
+        return bot;
     }
-  }
 
-  getBot(userId: string): BotInstance | undefined {
-    return this.bots.get(userId);
-  }
+    /**
+     * 특정 채널의 봇 인스턴스를 즉시 반환 (없으면 null)
+     */
+    public getBot(channelId: string): BotInstance | undefined {
+        return this.bots.get(channelId);
+    }
 
-  getActiveBotsCount(): number {
-    return this.bots.size;
-  }
+    /**
+     * 특정 채널의 봇을 안전하게 중지하고 제거합니다.
+     */
+    public async removeBot(channelId: string): Promise<void> {
+        const bot = this.bots.get(channelId);
+        if (bot) {
+            await bot.disconnect();
+            this.bots.delete(channelId);
+            console.log(`[BotManager] Bot instance removed for: ${channelId}`);
+        }
+    }
+
+    /**
+     * 모든 활성화된 봇의 상태 목록을 가져옵니다. (모니터링용)
+     */
+    public getAllStatus() {
+        const status: any[] = [];
+        this.bots.forEach((bot, channelId) => {
+            status.push(bot.getStatus());
+        });
+        return status;
+    }
+
+    /**
+     * 서버 종료 시 모든 봇을 안전하게 저장하고 연결을 끊습니다.
+     */
+    public async shutdownAll() {
+        console.log(`[BotManager] Shutting down all bots...`);
+        const tasks = Array.from(this.bots.keys()).map(channelId => this.removeBot(channelId));
+        await Promise.all(tasks);
+    }
 }

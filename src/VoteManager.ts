@@ -1,7 +1,6 @@
-import { ChatEvent, ChzzkChat, DonationEvent } from 'chzzk';
-import { ChatBot } from './Bot';
+import { ChatEvent, DonationEvent } from 'chzzk';
+import { BotInstance } from './BotInstance';
 import { v4 as uuidv4 } from 'uuid';
-import { supabase } from './supabase';
 
 export interface VoteOption {
     id: string;
@@ -16,13 +15,27 @@ export interface VoteSettings {
     duration: number;
 }
 
+export interface VoteSession {
+    id: string;
+    question: string;
+    options: VoteOption[];
+    results: { [optionId: string]: number };
+    voters: string[]; // 중복 투표 방지용
+    isActive: boolean;
+    settings: VoteSettings;
+    startTime: number | null;
+    totalVotes: number;
+}
+
+/**
+ * VoteManager: 실시간 투표 및 추첨 로직을 총괄합니다.
+ */
 export class VoteManager {
-    private currentVote: any = null;
-    private votes: any[] = [];
+    private currentVote: VoteSession | null = null;
     private onStateChangeCallback: () => void = () => {};
     private timer: NodeJS.Timeout | null = null;
 
-    constructor(private bot: ChatBot) {}
+    constructor(private bot: BotInstance) {}
 
     public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
@@ -30,18 +43,15 @@ export class VoteManager {
 
     private notify() {
         this.onStateChangeCallback();
-        this.saveToDB();
-    }
-
-    private async saveToDB() {
-        if (!this.bot.getChannelId()) return;
-        await supabase.from('channels').update({ current_vote: this.currentVote }).eq('channel_id', this.bot.getChannelId());
     }
 
     public setCurrentVote(vote: any) {
         this.currentVote = vote;
     }
 
+    /**
+     * 투표 생성 및 대기 상태 돌입
+     */
     public createVote(question: string, options: string[], settings: VoteSettings) {
         this.currentVote = {
             id: uuidv4(),
@@ -52,7 +62,7 @@ export class VoteManager {
             isActive: false,
             settings: {
                 ...settings,
-                donationWeight: Math.max(1, settings.donationWeight || 100) // 0으로 나누기 방지
+                donationWeight: Math.max(1, settings.donationWeight || 100)
             },
             startTime: null,
             totalVotes: 0
@@ -60,54 +70,69 @@ export class VoteManager {
         this.notify();
     }
 
+    /**
+     * 투표 시작 (실제 집계 개시)
+     */
     public startVote() {
         if (!this.currentVote || this.currentVote.isActive) return;
+        
         this.currentVote.isActive = true;
         this.currentVote.startTime = Date.now();
+        
         if (this.currentVote.settings.duration > 0) {
             if (this.timer) clearTimeout(this.timer);
             this.timer = setTimeout(() => this.endVote(), this.currentVote.settings.duration * 1000);
         }
+        
         this.notify();
     }
 
-    public async endVote() {
+    /**
+     * 투표 마감
+     */
+    public endVote() {
         if (!this.currentVote?.isActive) return;
         this.currentVote.isActive = false;
-        this.currentVote.endTime = Date.now();
-        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
-
-        await supabase.from('votes').insert({
-            channel_id: this.bot.getChannelId(),
-            question: this.currentVote.question,
-            options: this.currentVote.options,
-            results: this.currentVote.results,
-            settings: this.currentVote.settings,
-            total_votes: this.currentVote.totalVotes,
-            ended_at: new Date().toISOString()
-        });
-
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
         this.notify();
     }
 
+    /**
+     * 투표 데이터 초기화
+     */
     public resetVote() {
         this.currentVote = null;
-        if (this.timer) { clearTimeout(this.timer); this.timer = null; }
+        if (this.timer) {
+            clearTimeout(this.timer);
+            this.timer = null;
+        }
         this.notify();
     }
 
+    /**
+     * 채팅 투표 처리
+     */
     public async handleChat(chat: ChatEvent) {
         if (!this.currentVote?.isActive) return;
+        
         const userId = chat.profile.userIdHash;
-        if (this.currentVote.voters.includes(userId)) return;
+        if (this.currentVote.voters.includes(userId)) return; // 중복 투표 방지
+
+        // 설정 체크: 구독자 전용
         if (this.currentVote.settings.subscriberOnly && !chat.profile.badge?.imageUrl?.includes('subscribe')) return;
 
         const msg = chat.message.trim();
         let choice = "";
+
         if (this.currentVote.settings.mode === 'any') {
+            // 아무 글자 중 숫자가 포함되면 인식
             const match = msg.match(/\d+/);
             if (match) choice = match[0];
-        } else if (msg.startsWith('!')) {
+        } else {
+            // !1, !2 형태만 인식
             const match = msg.match(/^\!(\d+)$/);
             if (match) choice = match[1];
         }
@@ -120,8 +145,12 @@ export class VoteManager {
         }
     }
 
+    /**
+     * 도네이션 가중 투표 처리
+     */
     public async handleDonation(donation: DonationEvent) {
         if (!this.currentVote?.isActive || !this.currentVote.settings.allowDonation) return;
+
         const msg = donation.message?.trim() || "";
         const match = msg.match(/\d+/);
         if (match) {
@@ -137,6 +166,9 @@ export class VoteManager {
         }
     }
 
-    public getState() { return { currentVote: this.currentVote }; }
-    public getVotes() { return this.votes; }
+    public getState() {
+        return {
+            currentVote: this.currentVote
+        };
+    }
 }

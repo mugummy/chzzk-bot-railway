@@ -1,124 +1,112 @@
 import { ChzzkChat, ChatEvent } from 'chzzk';
 import { VariableProcessor } from './VariableProcessor';
-import { ChatBot } from './Bot';
+import { BotInstance } from './BotInstance';
 
 export interface Counter { 
     id?: string;
     trigger: string; 
     response: string; 
     enabled: boolean; 
-    oncePerDay?: boolean; // 하루 1회 제한 필드 추가
+    oncePerDay: boolean; // 하루 1회 제한 기능
     state: { 
-        totalCount?: number; 
-        lastUsedDate?: { [userIdHash: string]: string }; // 사용자별 마지막 사용 날짜
-        userCounts?: { [userIdHash: string]: number; }; 
+        totalCount: number; 
+        lastUsedDate: { [userIdHash: string]: string }; // 사용자별 마지막 사용 날짜 (YYYY-MM-DD)
     }; 
 }
 
+/**
+ * CounterManager: 명령어 실행 횟수를 기록하고 통계를 관리합니다.
+ */
 export class CounterManager {
     private counters: Counter[] = [];
     private variableProcessor: VariableProcessor;
     private onStateChangeCallback: () => void = () => {};
-    private triggerCache: Set<string> = new Set();
 
-    constructor(private bot: ChatBot, initialCounters: Counter[]) {
-        this.variableProcessor = new VariableProcessor(bot);
-        this.counters = initialCounters || [];
-        this.rebuildTriggerCache();
+    constructor(private bot: BotInstance, initialCounters: any[]) {
+        this.variableProcessor = new VariableProcessor(bot as any);
+        this.counters = (initialCounters || []).map(c => ({
+            ...c,
+            state: c.state || { totalCount: 0, lastUsedDate: {} }
+        }));
     }
 
     public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
     }
 
-    private notifyStateChange() {
+    private notify() {
         this.onStateChangeCallback();
-        this.bot.saveAllData();
     }
 
-    private rebuildTriggerCache(): void {
-        this.triggerCache.clear();
-        for (const counter of this.counters) {
-            if (counter.enabled) {
-                this.triggerCache.add(counter.trigger);
-            }
-        }
-    }
+    public getCounters() { return this.counters; }
 
+    /**
+     * 특정 메시지가 카운터 트리거인지 확인
+     */
     public hasCounter(message: string): boolean {
-        return this.triggerCache.has(message?.trim() || '');
+        const msg = message?.trim();
+        return this.counters.some(c => c.enabled && c.trigger === msg);
     }
 
+    /**
+     * 카운터 추가
+     */
     public addCounter(trigger: string, response: string, oncePerDay: boolean = false): boolean {
         if (this.counters.some(c => c.trigger === trigger)) return false;
-        const newCounter: Counter = {
-            id: `counter_${Date.now()}_${trigger.replace('!', '')}`,
+        
+        this.counters.push({
+            id: `cnt_${Date.now()}`,
             trigger,
             response,
             enabled: true,
             oncePerDay,
-            state: { totalCount: 0, userCounts: {}, lastUsedDate: {} }
-        };
-        this.counters.push(newCounter);
-        this.rebuildTriggerCache();
-        this.notifyStateChange();
+            state: { totalCount: 0, lastUsedDate: {} }
+        });
+        this.notify();
         return true;
     }
 
-    public updateCounter(oldTrigger: string, newTrigger: string, newResponse: string, newEnabled: boolean, oncePerDay?: boolean): boolean {
-        const counter = this.counters.find(c => c.trigger === oldTrigger);
-        if (counter) {
-            counter.trigger = newTrigger;
-            counter.response = newResponse;
-            counter.enabled = newEnabled;
-            if (oncePerDay !== undefined) counter.oncePerDay = oncePerDay;
-            this.rebuildTriggerCache();
-            this.notifyStateChange();
-            return true;
-        }
-        return false;
-    }
-
-    public removeCounter(trigger: string): boolean {
-        const initialLength = this.counters.length;
+    /**
+     * 카운터 제거
+     */
+    public removeCounter(trigger: string) {
         this.counters = this.counters.filter(c => c.trigger !== trigger);
-        if (this.counters.length < initialLength) {
-            this.rebuildTriggerCache();
-            this.notifyStateChange();
-            return true;
-        }
-        return false;
+        this.notify();
     }
 
-    public getCounters(): Counter[] { 
-        return this.counters.map((c, i) => ({
-            ...c,
-            id: c.id || `counter_${i}_${c.trigger.replace('!', '')}`
-        }));
-    }
-
+    /**
+     * 카운터 로직 실행 및 응답
+     */
     public async checkAndRespond(chat: ChatEvent, chzzkChat: ChzzkChat): Promise<void> {
-        if (chat.hidden || !chat.message) return;
         const msg = chat.message.trim();
         const today = new Date().toISOString().split('T')[0];
+        const userId = chat.profile.userIdHash;
 
-        for (const counter of this.counters) {
-            if (counter.enabled && msg === counter.trigger) {
-                // 하루 1회 제한 체크
-                if (counter.oncePerDay) {
-                    const lastDate = counter.state.lastUsedDate?.[chat.profile.userIdHash];
-                    if (lastDate === today) return;
-                }
+        const counter = this.counters.find(c => c.enabled && c.trigger === msg);
+        if (!counter) return;
 
-                counter.state.totalCount = (counter.state.totalCount || 0) + 1;
-                counter.state.lastUsedDate = counter.state.lastUsedDate || {};
-                counter.state.lastUsedDate[chat.profile.userIdHash] = today;
-
-                const responseText = await this.variableProcessor.process(counter.response, { chat, commandState: counter.state });
-                chzzkChat.sendChat(responseText);
-                this.notifyStateChange();
-                break;
+        // 하루 1회 제한 체크
+        if (counter.oncePerDay) {
+            if (counter.state.lastUsedDate[userId] === today) {
+                // 이미 오늘 사용함 (무시 혹은 안내 메시지 선택 가능)
+                return;
             }
+        }
+
+        // 1. 상태 업데이트
+        counter.state.totalCount++;
+        counter.state.lastUsedDate[userId] = today;
+
+        // 2. 변수 처리 및 전송
+        try {
+            const responseText = await this.variableProcessor.process(counter.response, { 
+                chat, 
+                commandState: counter.state 
+            });
+            await chzzkChat.sendChat(responseText);
+            this.notify();
+        } catch (err) {
+            console.error(`[CounterManager] Execution error for ${counter.trigger}:`, err);
         }
     }
 }

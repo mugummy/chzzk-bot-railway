@@ -1,316 +1,127 @@
-// src/SongManager.ts
-
-import ytdl from "@distube/ytdl-core";
-import { google } from "googleapis";
-import { DataManager, BotData } from "./DataManager";
-import { ChatBot } from "./Bot";
-import { ChatEvent } from "chzzk";
-import { BotSettings } from "./SettingsManager";
-
-const youtube = google.youtube("v3");
-const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY;
+import { ChatEvent, ChzzkChat, DonationEvent } from 'chzzk';
+import ytdl from 'ytdl-core';
+import { BotInstance } from './BotInstance';
 
 export interface Song {
-  id: string;
-  title: string;
-  url: string;
-  requester: string;
-  thumbnail?: string; // 썸네일을 선택적으로 변경
+    videoId: string;
+    title: string;
+    thumbnail: string;
+    requester: string;
+    requestedAt: number;
 }
 
+/**
+ * SongManager: 신청곡 대기열 관리 및 유튜브 연동을 담당합니다.
+ */
 export class SongManager {
-  private queue: Song[] = [];
-  private currentSong: Song | null = null;
-  private isPlaying: boolean = false;
-  private onStateChangeCallback: (() => void) | null = null;
+    private queue: Song[] = [];
+    private currentSong: Song | null = null;
+    private onStateChangeCallback: () => void = () => {};
 
-  constructor(private bot: ChatBot, loadedData?: Partial<BotData>) {
-    // [추가] 데이터 로드 로직
-    this.queue = loadedData?.songQueue || [];
-    this.currentSong = loadedData?.currentSong || null;
-    this.isPlaying = false; // 봇 시작 시 isPlaying을 false로 초기화
-  }
-
-  public setOnStateChangeListener(callback: () => void) {
-    this.onStateChangeCallback = callback;
-  }
-
-  private notifyStateChange() {
-    console.log(`[SongManager] ========== STATE CHANGE ==========`);
-    console.log(`[SongManager] Current Song: ${this.currentSong ? this.currentSong.title : 'None'}`);
-    console.log(`[SongManager] Is Playing: ${this.isPlaying}`);
-    console.log(`[SongManager] Queue Length: ${this.queue.length}`);
-    console.log(`[SongManager] Queue: [${this.queue.map(s => s.title).join(', ')}]`);
-    
-    if (this.onStateChangeCallback) {
-      console.log(`[SongManager] Calling state change callback...`);
-      this.onStateChangeCallback();
-    } else {
-      console.log(`[SongManager] No state change callback set!`);
-    }
-    
-    console.log(`[SongManager] Saving all data...`);
-    this.bot.saveAllData();
-    console.log(`[SongManager] ========== STATE CHANGE END ==========`);
-  }
-  
-  // [추가] 데이터 저장을 위한 데이터 반환 함수
-  public getData() {
-    return {
-        songQueue: this.queue, // 실제 대기열 저장
-        currentSong: this.currentSong // 실제 현재 노래 저장
-    };
-  }
-
-  // [추가] main.ts에서 호출하는 모든 함수를 구현합니다.
-  public getState() {
-    return {
-      queue: this.queue,
-      currentSong: this.currentSong,
-      isPlaying: this.isPlaying,
-    };
-  }
-
-  public playSong(query: string): void {
-    this.requestSong(query, "Web UI");
-  }
-
-  public skipSong(): void {
-    this.playNextSong();
-  }
-  
-  public togglePlayPause(): void {
-    if (this.currentSong) {
-      this.isPlaying = !this.isPlaying;
-      this.notifyStateChange();
-    }
-  }
-
-  public removeCurrentSong(): void {
-    this.playNextSong();
-  }
-  
-  public removeFromQueue(songId: string): void {
-    const songIndex = this.queue.findIndex(song => song.id === songId);
-    if (songIndex > -1) {
-      this.queue.splice(songIndex, 1);
-      this.notifyStateChange();
-    }
-  }
-
-  public playFromQueue(songId: string): void {
-    const songIndex = this.queue.findIndex(song => song.id === songId);
-    if (songIndex > -1) {
-      const song = this.queue.splice(songIndex, 1)[0];
-      this.currentSong = song;
-      this.isPlaying = true;
-      this.notifyStateChange();
-    }
-  }
-
-  async requestSong(query: string, requester: string): Promise<Song> {
-    if (!YOUTUBE_API_KEY) {
-      throw new Error("유튜브 API 키가 설정되지 않았습니다. .env 파일 확인이 필요합니다.");
-    }
-    
-    // 입력값 검증 및 정리
-    const sanitizedQuery = query.trim();
-    if (!sanitizedQuery) {
-      throw new Error("검색어 또는 URL을 입력해주세요.");
-    }
-    
-    let videoId = "";
-    let videoTitle = "";
-    let thumbnailUrl: string | undefined;
-
-    if (ytdl.validateURL(sanitizedQuery) || ytdl.validateID(sanitizedQuery)) {
-      try {
-        const info = await ytdl.getInfo(sanitizedQuery);
-        videoId = info.videoDetails.videoId;
-        videoTitle = info.videoDetails.title;
-        thumbnailUrl = info.videoDetails.thumbnails?.[0]?.url || "";
-      } catch (ytdlError) {
-        console.warn("[SongManager] info load failed, using basic ID:", ytdlError);
-        videoId = ytdl.getURLVideoID(sanitizedQuery);
-        videoTitle = "유튜브 노래 (제목 불러오기 실패)";
-        thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
-      }
-    } else {
-      const searchResult = await youtube.search.list({
-        key: YOUTUBE_API_KEY,
-        part: ["snippet"],
-        q: query,
-        type: ["video"],
-        maxResults: 1,
-      });
-
-      if (
-        !searchResult.data.items ||
-        searchResult.data.items.length === 0 ||
-        !searchResult.data.items[0].id?.videoId ||
-        !searchResult.data.items[0].snippet?.title
-      ) {
-        throw new Error("검색 결과가 없습니다.");
-      }
-      videoId = searchResult.data.items[0].id.videoId;
-      videoTitle = searchResult.data.items[0].snippet.title;
-      thumbnailUrl = searchResult.data.items[0].snippet?.thumbnails?.high?.url ?? undefined;
+    constructor(private bot: BotInstance, initialData: any) {
+        this.queue = initialData.songQueue || [];
     }
 
-    const song: Song = {
-      id: videoId,
-      title: videoTitle,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      requester,
-      thumbnail: thumbnailUrl,
-    };
-
-    if (!this.currentSong && this.queue.length === 0) {
-      this.currentSong = song;
-      this.isPlaying = true;
-      this.notifyStateChange();
-    } else {
-      this.queue.push(song);
-      this.notifyStateChange();
+    public setOnStateChangeListener(callback: () => void) {
+        this.onStateChangeCallback = callback;
     }
 
-    return song;
-  }
-
-  public playNextSong(): void {
-    if (this.queue.length > 0) {
-      this.currentSong = this.queue.shift()!;
-      this.isPlaying = true;
-    } else {
-      this.currentSong = null;
-      this.isPlaying = false;
+    private notify() {
+        this.onStateChangeCallback();
     }
-    this.notifyStateChange();
-  }
 
-  getQueue(): Song[] {
-    return this.queue;
-  }
+    public getState() {
+        return {
+            queue: this.queue,
+            currentSong: this.currentSong
+        };
+    }
 
-  getCurrentSong(): Song | null {
-    return this.currentSong;
-  }
+    /**
+     * 채팅 명령어 (!노래신청 [URL]) 처리
+     */
+    public async handleCommand(chat: ChatEvent, chzzkChat: ChzzkChat, settings: any) {
+        const msg = chat.message.trim();
+        const parts = msg.split(' ');
+        const cmd = parts[0];
 
-  public async handleCommand(chat: ChatEvent, chatClient: any, settings: BotSettings) {
-    console.log(`[SongManager] handleCommand called for message: ${chat.message}`);
-    const message = chat.message.trim();
-    const args = message.split(' ').slice(1);
-    const command = message.split(' ')[0];
-    const requester = chat.profile.nickname;
-
-    try {
-        const customCmd = settings.songRequestCommand || '!신청곡';
-        if (command === customCmd || command === '!노래') {
-            // 신청곡 모드 확인
-            if (settings.songRequestMode === 'off') {
-                chatClient.sendChat('현재 신청곡 기능이 비활성화되어 있습니다.');
-                return;
-            }
+        if (cmd === '!노래신청' || cmd === '!노래') {
+            const query = parts.slice(1).join(' ');
+            if (!query) return chzzkChat.sendChat('사용법: !노래 [유튜브링크]');
             
-            if (args.length === 0) {
-                chatClient.sendChat(`사용법: ${customCmd} <노래 제목 또는 유튜브 URL>`);
-                return;
+            try {
+                const song = await this.fetchSongInfo(query, chat.profile.nickname);
+                this.queue.push(song);
+                chzzkChat.sendChat(`🎵 ${song.title} 곡이 대기열에 추가되었습니다! (대기: ${this.queue.length}곡)`);
+                this.notify();
+            } catch (err: any) {
+                chzzkChat.sendChat(`❌ 신청 실패: ${err.message}`);
             }
-            
-            // 쿨다운 확인
-            if (settings.songRequestMode === 'cooldown') {
-                // 쿨다운 로직 (생략 가능)
-            }
-            
-            const query = args.join(' ');
-            const song = await this.requestSong(query, requester);
-            
-            // 커스텀 응답 문구 적용
-            const responseTemplate = settings.songRequestResponse || '{user}님, {song} 를 신청곡 리스트에 추가했어요!';
-            const finalMsg = responseTemplate
-                .replace(/{user}/g, requester)
-                .replace(/{song}/g, song.title);
-                
-            chatClient.sendChat(finalMsg);
-        } else if (command === '!대기열' || command === '!신청곡목록') {
-            const queue = this.getQueue();
-            if (queue.length === 0) {
-                chatClient.sendChat('신청곡 목록이 비어있습니다.');
-                return;
-            }
-            const songList = queue.map((song, index) => `${index + 1}. ${song.title}`).join(', ');
-            chatClient.sendChat(`신청곡 목록: ${songList}`);
-        } else if (command === '!현재노래') {
-            const currentSong = this.getCurrentSong();
-            if (currentSong) {
-                chatClient.sendChat(`현재 재생 중: ${currentSong.title} (신청자: ${currentSong.requester})`);
-            } else {
-                chatClient.sendChat('현재 재생 중인 노래가 없습니다.');
-            }
-        } else if (command === '!다음곡' || command === '!스킵') {
-            const currentRequester = this.getCurrentSong()?.requester;
-            // [수정] 가장 안정적인 권한 확인 방식으로 수정합니다.
-            const privileges = (chat.profile as any).privileges || [];
-            const isManager = privileges.includes('channel_manager');
-            const isStreamer = privileges.includes('streamer');
-
-            if (isManager || isStreamer || requester === currentRequester) {
-                this.playNextSong();
-                const nextSong = this.getCurrentSong();
-                if (nextSong) {
-                    chatClient.sendChat(`다음 곡을 재생합니다: ${nextSong.title}`);
-                } else {
-                    chatClient.sendChat('대기열에 다음 곡이 없습니다. 노래 재생을 종료합니다.');
-                }
-            } else {
-                chatClient.sendChat('스트리머, 관리자 또는 노래를 신청한 사람만 다음 곡으로 넘길 수 있습니다.');
-            }
+        } else if (cmd === '!스킵') {
+            // 스트리머 또는 권한자 체크 로직 추가 가능
+            this.skipSong();
+            chzzkChat.sendChat('⏭️ 현재 곡을 스킵했습니다.');
         }
-    } catch (error: any) {
-        console.error("Song command error:", error);
-        chatClient.sendChat(`오류가 발생했습니다: ${error.message}`);
     }
-  }
 
-  public async addSongFromDonation(donation: any, url: string, settings: BotSettings): Promise<Song> {
-      console.log("Donation song request received:", url);
-      const song = await this.requestSong(url, donation.profile.nickname);
-      return song;
-  }
+    /**
+     * 후원 메시지로 신청된 노래 처리
+     */
+    public async addSongFromDonation(donation: DonationEvent, url: string, settings: any) {
+        try {
+            const song = await this.fetchSongInfo(url, donation.profile.nickname);
+            this.queue.push(song);
+            this.notify();
+        } catch (err) {
+            console.error('[SongManager] Donation song failed:', err);
+        }
+    }
 
-  // 설정 업데이트 메서드
-  public updateSetting(setting: string, value: any): void {
-      console.log(`Updating song setting: ${setting} = ${value}`);
-      
-      // 실제 봇 설정을 업데이트
-      const settingsUpdate: any = {};
-      
-      switch (setting) {
-          case 'songRequestMode':
-              settingsUpdate.songRequestMode = value;
-              console.log(`Song request mode changed to: ${value}`);
-              break;
-          case 'playbackMode':
-              settingsUpdate.playbackMode = value;
-              console.log(`Playback mode changed to: ${value}`);
-              break;
-          case 'songRequestCooldown':
-              settingsUpdate.songRequestCooldown = parseInt(value) || 30;
-              console.log(`Song request cooldown changed to: ${settingsUpdate.songRequestCooldown} seconds`);
-              break;
-          case 'songRequestMinDonation':
-              settingsUpdate.songRequestMinDonation = parseInt(value) || 1000;
-              console.log(`Donation request minimum amount changed to: ${settingsUpdate.songRequestMinDonation} won`);
-              break;
-          default:
-              console.warn(`Unknown song setting: ${setting}`);
-              return;
-      }
-      
-      // 봇 설정 업데이트 및 저장
-      this.bot.updateSettings(settingsUpdate);
-      
-      // 상태 변경 알림
-      this.notifyStateChange();
-  }
+    /**
+     * 유튜브 정보 추출 (ytdl-core)
+     */
+    private async fetchSongInfo(query: string, requester: string): Promise<Song> {
+        let videoId = '';
+        if (ytdl.validateURL(query)) videoId = ytdl.getURLVideoID(query);
+        else if (ytdl.validateID(query)) videoId = query;
+        else throw new Error('올바른 유튜브 링크가 아닙니다.');
+
+        try {
+            const info = await ytdl.getBasicInfo(videoId);
+            return {
+                videoId,
+                title: info.videoDetails.title,
+                thumbnail: info.videoDetails.thumbnails[0]?.url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                requester,
+                requestedAt: Date.now()
+            };
+        } catch (err) {
+            // 정보 로딩 실패 시 비디오 ID만으로 생성 (안전망)
+            return {
+                videoId,
+                title: '유튜브 노래 (정보 로드 실패)',
+                thumbnail: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                requester,
+                requestedAt: Date.now()
+            };
+        }
+    }
+
+    public skipSong() {
+        if (this.queue.length > 0) {
+            this.currentSong = this.queue.shift() || null;
+        } else {
+            this.currentSong = null;
+        }
+        this.notify();
+    }
+
+    public togglePlayPause() {
+        // 플레이어에 메시지 전달 (WebSocket 브로드캐스트를 통해 처리됨)
+        this.notify();
+    }
+
+    public getData() {
+        return { songQueue: this.queue, currentSong: this.currentSong };
+    }
 }
