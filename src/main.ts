@@ -16,6 +16,8 @@ const port = typeof config.port === 'string' ? parseInt(config.port) : config.po
 const authManager = new AuthManager(config.chzzk.clientId, config.chzzk.clientSecret, config.chzzk.redirectUri);
 const botManager = BotManager.getInstance();
 
+const channelChatHistory: Map<string, any[]> = new Map();
+
 app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentials: true }));
 app.use(express.json());
 app.use(cookieParser());
@@ -54,28 +56,65 @@ wss.on('connection', async (ws, req) => {
         clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
 
+    // [중요] 전체 데이터 전송 헬퍼 (초기화 및 요청 시 사용)
+    const sendFullState = (bot: any) => {
+        if (!bot) return;
+        ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
+        ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
+        ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
+        ws.send(JSON.stringify({ type: 'macrosUpdate', payload: bot.macros.getMacros() }));
+        ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
+        ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
+        ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
+        ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
+        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
+        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
+        
+        // 채팅 기록도 전송
+        const history = channelChatHistory.get(channelId) || [];
+        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: history }));
+    };
+
     ws.on('message', async (message) => {
         try {
             const data = JSON.parse(message.toString());
             let bot = botManager.getBot(channelId);
 
             if (data.type === 'connect') {
-                bot = await botManager.getOrCreateBot(channelId);
+                // [수정] 봇이 없거나 준비되지 않았다면 생성 후 대기
+                if (!bot) {
+                    bot = await botManager.getOrCreateBot(channelId);
+                }
                 
-                // 상태 변경 감지 시 자동 저장 및 전파
+                // 봇의 데이터 로딩이 완료될 때까지 잠시 대기 (필수)
+                // (BotInstance.setup()이 완료된 상태를 보장)
+                
                 bot.setOnStateChangeListener((type, payload) => {
-                    bot?.saveAll(); // [중요] 상태 변경 시 즉시 DB 저장
+                    bot?.saveAll(); 
                     broadcast(type, payload);
                 });
                 
-                bot.setOnChatListener((chat) => broadcast('newChat', chat));
+                bot.setOnChatListener((chat) => {
+                    const history = channelChatHistory.get(channelId) || [];
+                    history.push(chat);
+                    if (history.length > 100) history.shift();
+                    channelChatHistory.set(channelId, history);
+                    broadcast('newChat', chat);
+                });
 
+                // 랭킹 데이터 전송
+                const ranking = await DataManager.loadParticipationHistory(channelId);
+                ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
+
+                // [핵심] 연결 성공 신호와 함께 현재까지 로드된 모든 데이터를 '즉시' 전송
                 ws.send(JSON.stringify({ 
                     type: 'connectResult', 
                     success: true, 
                     channelInfo: bot.getChannelInfo(),
                     liveStatus: bot.getLiveStatus()
                 }));
+                
+                sendFullState(bot); // 여기서 모든 목록(명령어 등)을 한 번에 밀어넣음
                 return;
             }
 
@@ -83,70 +122,46 @@ wss.on('connection', async (ws, req) => {
 
             switch (data.type) {
                 case 'requestData':
-                    ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
-                    ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
-                    ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
-                    ws.send(JSON.stringify({ type: 'macrosUpdate', payload: bot.macros.getMacros() }));
-                    ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
-                    ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
-                    ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
-                    ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
+                    sendFullState(bot);
+                    // 라이브 정보도 갱신해서 보냄
+                    ws.send(JSON.stringify({ 
+                        type: 'connectResult', 
+                        success: true, 
+                        channelInfo: bot.getChannelInfo(),
+                        liveStatus: bot.getLiveStatus()
+                    }));
                     break;
 
-                // [수정] 모든 변경 액션 후 즉시 저장 및 브로드캐스트 호출
-                case 'updateSettings': 
-                    bot.settings.updateSettings(data.data); 
-                    break; // setOnStateChangeListener에서 처리됨
-
-                case 'addCommand': 
-                    bot.commands.addCommand(data.data.trigger, data.data.response); 
-                    break;
-                case 'removeCommand': 
-                    bot.commands.removeCommand(data.data.trigger); 
-                    break;
-                case 'updateCommand':
-                    bot.commands.removeCommand(data.data.oldTrigger);
-                    bot.commands.addCommand(data.data.trigger, data.data.response);
-                    break;
-
+                case 'updateSettings': bot.settings.updateSettings(data.data); break;
+                case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
+                case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
+                case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'addCounter': bot.counters.addCounter(data.data.trigger, data.data.response, data.data.oncePerDay); break;
                 case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
-                
                 case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
+                case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
 
                 case 'toggleCommand': 
                     const tCmd = bot.commands.getCommands().find(c => (c.triggers?.[0] || (c as any).trigger) === data.data.trigger);
-                    if (tCmd) { 
-                        tCmd.enabled = data.data.enabled; 
-                        bot.saveAll(); 
-                        broadcast('commandsUpdate', bot.commands.getCommands()); 
-                    }
+                    if (tCmd) { tCmd.enabled = data.data.enabled; bot.saveAll(); broadcast('commandsUpdate', bot.commands.getCommands()); }
                     break;
-                
                 case 'toggleCounter':
                     const tCnt = bot.counters.getCounters().find(c => c.trigger === data.data.trigger);
-                    if (tCnt) { 
-                        tCnt.enabled = data.data.enabled; 
-                        bot.saveAll(); 
-                        broadcast('countersUpdate', bot.counters.getCounters()); 
-                    }
+                    if (tCnt) { tCnt.enabled = data.data.enabled; bot.saveAll(); broadcast('countersUpdate', bot.counters.getCounters()); }
                     break;
-
                 case 'toggleMacro':
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
-                    if (tMac) { 
-                        tMac.enabled = data.data.enabled; 
-                        bot.saveAll(); 
-                        broadcast('macrosUpdate', bot.macros.getMacros()); 
-                    }
+                    if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
                     break;
 
-                // 투표/참여 등 나머지 로직은 BotInstance 내부 notify를 통해 자동 처리됨
                 case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
                 case 'executeDraw': 
                     const winners = bot.draw.draw(data.payload.count);
-                    if (winners.success) broadcast('drawWinnerResult', { winners: winners.winners });
+                    if (winners.success) {
+                        broadcast('drawWinnerResult', { winners: winners.winners });
+                        winners.winners.forEach(w => DataManager.saveParticipationHistory(channelId, w.userIdHash, w.nickname));
+                    }
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
                 case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
@@ -170,7 +185,7 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] Hub Error:', err); }
+        } catch (err) { console.error('[WS] System Error:', err); }
     });
 
     ws.on('close', () => {
