@@ -17,11 +17,11 @@ export class BotInstance {
     public chat: ChzzkChat | null = null;
     private botUserIdHash: string | null = null;
 
-    // 외부 연동용 공개 데이터
+    // 대시보드 및 연동용 데이터
     public liveDetail: LiveDetail | null = null;
     public channel: Channel | null = null;
 
-    // 매니저 객체들
+    // 기능 매니저
     public commands!: CommandManager;
     public songs!: SongManager;
     public votes!: VoteManager;
@@ -38,7 +38,16 @@ export class BotInstance {
     private onChatCallback: (chat: ChatEvent) => void = () => {};
 
     constructor(private channelId: string, nidAuth: string, nidSes: string) {
-        this.client = new ChzzkClient({ nidAuth, nidSession: nidSes });
+        // [수정] 쿠키 값 정제 (NID_AUTH= 등의 접두사 자동 제거)
+        const cleanAuth = nidAuth.split(';')[0].replace('NID_AUTH=', '').trim();
+        const cleanSes = nidSes.split(';')[0].replace('NID_SES=', '').replace('NID_SESSION=', '').trim();
+
+        console.log(`[BotInstance] Initializing with clean tokens (Len: ${cleanAuth.length}, ${cleanSes.length})`);
+        
+        this.client = new ChzzkClient({ 
+            nidAuth: cleanAuth, 
+            nidSession: cleanSes 
+        });
     }
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
@@ -54,6 +63,7 @@ export class BotInstance {
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
 
+        // 매니저 객체 생성 및 배선
         this.settings = new SettingsManager(data.settings);
         this.commands = new CommandManager(this as any, data.commands);
         this.counters = new CounterManager(this as any, data.counters);
@@ -68,47 +78,47 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
 
         try {
+            // 채널 정보 로드
             this.channel = await this.client.channel(this.channelId);
             this.liveDetail = await this.client.live.detail(this.channelId);
-            if (!this.liveDetail?.chatChannelId) throw new Error('Chat ID Missing');
-
-            this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
             
-            this.chat.on('chat', (chat) => this.handleChat(chat));
-            this.chat.on('donation', (donation) => this.handleDonation(donation));
-            
-            this.chat.on('connect', async () => {
-                try {
-                    const self = await this.chat?.selfProfile();
-                    this.botUserIdHash = self?.userIdHash || null;
-                    this.macros.setChatClient(this.chat!);
-                    console.log(`[BotInstance] Logged in as: ${self?.nickname}`);
-                } catch (e) {
-                    console.error('[BotInstance] Auth Error: NID_AUTH/SES is invalid. Bot will remain in read-only mode.');
-                    this.notify('error', '봇 로그인에 실패했습니다 (NID_AUTH/SES 만료). 채팅 전송이 제한됩니다.');
-                }
-            });
+            if (this.liveDetail?.chatChannelId) {
+                this.chat = this.client.chat({ 
+                    channelId: this.channelId, 
+                    chatChannelId: this.liveDetail.chatChannelId 
+                });
+                
+                this.chat.on('chat', (chat) => this.handleChat(chat));
+                this.chat.on('donation', (donation) => this.handleDonation(donation));
+                
+                this.chat.on('connect', async () => {
+                    try {
+                        const self = await this.chat?.selfProfile();
+                        this.botUserIdHash = self?.userIdHash || null;
+                        this.macros.setChatClient(this.chat!);
+                        console.log(`[BotInstance] Success! gummybot logged in as: ${self?.nickname}`);
+                    } catch (e) {
+                        console.error('[BotInstance] Login fail - Tokens might be expired or invalid');
+                        this.notify('error', '치지직 로그인 세션이 유효하지 않습니다. 환경변수를 업데이트하세요.');
+                    }
+                });
 
-            await this.chat.connect();
+                await this.chat.connect();
+            }
         } catch (err) {
-            console.error('[BotInstance] Setup Critical Error:', err);
+            console.error('[BotInstance] Critical Setup Error:', err);
         }
     }
 
     private async handleChat(chat: ChatEvent) {
-        // [중요] 봇 본인의 채팅은 무시 (무한 루프 방지)
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
-
-        // 대시보드 실시간 채팅창 전송
         this.onChatCallback(chat);
 
-        // 기능 실행 (기록 및 통계는 chatEnabled와 상관없이 수행)
         await this.greet.handleChat(chat, this.chat!);
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
 
-        // 명령어 및 응답 처리 (오직 chatEnabled가 켜져 있을 때만 실행)
         if (this.settings.getSettings().chatEnabled) {
             const msg = chat.message.trim();
             if (msg.startsWith('!')) {
@@ -116,7 +126,6 @@ export class BotInstance {
                 if (['!노래', '!신청', '!스킵'].includes(cmd)) await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
                 else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
             }
-
             if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
             else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
         }
@@ -124,11 +133,27 @@ export class BotInstance {
 
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
-        const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
-        const match = donation.message?.match(youtubeUrlRegex);
-        if (match && match[0]) {
-            try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {}
-        }
+        const match = donation.message?.match(/(?:https?:\/\/)?(?:www\.)?youtu\.?be(?:\.com\/watch\?v=|\/)([a-zA-Z0-9_-]{11})/);
+        if (match) { try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {} }
+    }
+
+    // 대시보드 필수 정보 반환 메서드
+    public getChannelInfo() {
+        return {
+            channelId: this.channelId,
+            channelName: this.channel?.channelName || "정보 없음",
+            channelImageUrl: this.channel?.channelImageUrl || "",
+            followerCount: this.channel?.followerCount || 0
+        };
+    }
+
+    public getLiveStatus() {
+        return {
+            liveTitle: this.liveDetail?.liveTitle || "오프라인",
+            status: this.liveDetail?.status || "CLOSE",
+            concurrentUserCount: this.liveDetail?.concurrentUserCount || 0,
+            category: this.liveDetail?.category || "미지정"
+        };
     }
 
     public async saveAll() {
