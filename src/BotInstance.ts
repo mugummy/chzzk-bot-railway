@@ -119,12 +119,14 @@ export class BotInstance {
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
 
+        // 채팅 응답 (활성화 시에만)
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
             if (msg.startsWith('!')) {
                 const cmd = msg.split(' ')[0];
-                if (['!노래', '!신청', '!스킵'].includes(cmd)) await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
+                // [수정] 노래 관련은 SongManager에게 전적으로 위임 (!노래)
+                if (cmd === '!노래') await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
                 else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
             }
             if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
