@@ -24,11 +24,11 @@ export interface BotData {
 }
 
 export class DataManager {
+    private static saveQueue: Map<string, BotData> = new Map();
     private static saveTimeouts: Map<string, NodeJS.Timeout> = new Map();
 
     static async loadData(channelId: string): Promise<BotData> {
         console.log(`[DataManager] Loading all assets for: ${channelId}`);
-
         const [chan, cmds, macs, cnts, pts] = await Promise.all([
             supabase.from('channels').select('*').eq('channel_id', channelId).single(),
             supabase.from('commands').select('*').eq('channel_id', channelId),
@@ -57,13 +57,7 @@ export class DataManager {
                 acc[p.user_id_hash] = { nickname: p.nickname, points: p.amount, lastMessageTime: p.last_chat_at ? new Date(p.last_chat_at).getTime() : 0 };
                 return acc;
             }, {}),
-            commands: (cmds.data || []).map(c => ({ 
-                trigger: c.triggers[0], 
-                triggers: c.triggers, 
-                response: c.response, 
-                enabled: c.enabled,
-                state: { totalCount: 0, userCounts: {} } 
-            })),
+            commands: (cmds.data || []).map(c => ({ trigger: c.triggers[0], triggers: c.triggers, response: c.response, enabled: c.enabled })),
             macros: (macs.data || []).map(m => ({ id: m.id, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
             counters: (cnts.data || []).map(c => ({ trigger: c.trigger, response: c.response, enabled: c.enabled, oncePerDay: c.once_per_day, state: { totalCount: c.count, lastUsedDate: {} } })),
             votes: db.current_vote ? [db.current_vote] : [],
@@ -82,27 +76,38 @@ export class DataManager {
     }
 
     static async saveData(channelId: string, data: BotData): Promise<void> {
-        console.log(`[DataManager] Saving all data for channel: ${channelId}...`);
-        
+        // 큐에 데이터 저장
+        this.saveQueue.set(channelId, data);
+
+        // 이미 예약된 저장이 있다면 무시 (마지막 호출로부터 1초 뒤 실행)
+        if (this.saveTimeouts.has(channelId)) return;
+
+        const timeout = setTimeout(async () => {
+            this.saveTimeouts.delete(channelId);
+            const latestData = this.saveQueue.get(channelId);
+            if (latestData) {
+                this.saveQueue.delete(channelId);
+                await this.executeActualSave(channelId, latestData);
+            }
+        }, 1000);
+
+        this.saveTimeouts.set(channelId, timeout);
+    }
+
+    private static async executeActualSave(channelId: string, data: BotData): Promise<void> {
+        console.log(`[DataManager] Syncing to Supabase: ${channelId}`);
         try {
-            // 1. 채널 메타데이터 업데이트 (update 사용 - 세션 컬럼 보존)
-            const { error: channelError } = await supabase
-                .from('channels')
-                .update({
-                    settings: data.settings,
-                    overlay_settings: data.overlaySettings || {},
-                    song_queue: data.songQueue || [],
-                    current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
-                    participation_data: data.participants,
-                    greet_settings: data.greetData?.settings,
-                    greet_history: data.greetData?.history,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('channel_id', channelId);
+            await supabase.from('channels').update({
+                settings: data.settings,
+                overlay_settings: data.overlaySettings,
+                song_queue: data.songQueue,
+                current_vote: data.votes?.length ? data.votes[data.votes.length - 1] : null,
+                participation_data: data.participants,
+                greet_settings: data.greetData?.settings,
+                greet_history: data.greetData?.history,
+                updated_at: new Date().toISOString()
+            }).eq('channel_id', channelId);
 
-            if (channelError) throw channelError;
-
-            // 2. 명령어/매크로/카운터 저장
             await Promise.all([
                 (async () => {
                     await supabase.from('commands').delete().eq('channel_id', channelId);
@@ -129,9 +134,7 @@ export class DataManager {
                     }
                 })()
             ]);
-            console.log(`[DataManager] Successfully saved all data for ${channelId}`);
-        } catch (error) {
-            console.error(`[DataManager] Critical Error saving data for ${channelId}:`, error);
-        }
+            console.log(`[DataManager] All data persistent for ${channelId}`);
+        } catch (e) { console.error(`[DataManager] Save Failed:`, e); }
     }
 }

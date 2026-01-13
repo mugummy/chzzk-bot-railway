@@ -128,14 +128,12 @@ export class SongManager {
         const info = await ytdl.getInfo(sanitizedQuery);
         videoId = info.videoDetails.videoId;
         videoTitle = info.videoDetails.title;
-        if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-          thumbnailUrl = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
-        }
+        thumbnailUrl = info.videoDetails.thumbnails?.[0]?.url || "";
       } catch (ytdlError) {
-        console.warn("[SongManager] ytdl.getInfo failed, falling back to basic ID extraction:", ytdlError);
-        // URL에서 비디오 ID 강제 추출
+        console.warn("[SongManager] info load failed, using basic ID:", ytdlError);
         videoId = ytdl.getURLVideoID(sanitizedQuery);
-        videoTitle = "유튜브 노래 (제목 로드 실패)";
+        videoTitle = "유튜브 노래 (제목 불러오기 실패)";
+        thumbnailUrl = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
       }
     } else {
       const searchResult = await youtube.search.list({
