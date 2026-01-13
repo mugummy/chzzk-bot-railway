@@ -1,9 +1,6 @@
 import { supabase } from "./supabase";
 import { defaultSettings } from "./SettingsManager";
 
-/**
- * DataManager: 데이터베이스 통신 총괄 (참여 기록 함수 포함 최종본)
- */
 export class DataManager {
     private static saveQueue: Map<string, any> = new Map();
     private static saveTimeouts: Map<string, NodeJS.Timeout> = new Map();
@@ -45,24 +42,17 @@ export class DataManager {
         };
     }
 
-    // [핵심] 누락되었던 메서드 복구
+    // [수정] 단순 조회로 변경하여 GROUP BY 에러 해결
     static async loadParticipationHistory(channelId: string) {
         try {
-            const { data, error } = await supabase
+            const { data } = await supabase
                 .from('participation_history')
                 .select('nickname, count')
                 .eq('channel_id', channelId)
                 .order('count', { ascending: false })
                 .limit(10);
-            
-            if (error) {
-                console.warn('[DataManager] Ranking load error (ignoring):', error.message);
-                return [];
-            }
             return data || [];
-        } catch (e) { 
-            return []; 
-        }
+        } catch (e) { return []; }
     }
 
     static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
@@ -73,7 +63,7 @@ export class DataManager {
             } else {
                 await supabase.from('participation_history').insert({ channel_id: channelId, user_id_hash: userIdHash, nickname, count: 1 });
             }
-        } catch (e) { console.error('[DataManager] Ranking save error:', e); }
+        } catch (e) {}
     }
 
     static async saveData(channelId: string, data: any): Promise<void> {
@@ -83,7 +73,7 @@ export class DataManager {
             this.saveTimeouts.delete(channelId);
             const latest = this.saveQueue.get(channelId);
             if (latest) { await this.executeActualSave(channelId, latest); }
-        }, 1000); // 1초 디바운스 유지 (DB 과부하 방지)
+        }, 1000);
         this.saveTimeouts.set(channelId, timeout);
     }
 

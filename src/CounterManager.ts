@@ -1,21 +1,21 @@
 import { ChzzkChat, ChatEvent } from 'chzzk';
 import { VariableProcessor } from './VariableProcessor';
 import { BotInstance } from './BotInstance';
+import { DataManager } from './DataManager';
 
 export interface Counter { 
     id?: string;
     trigger: string; 
     response: string; 
     enabled: boolean; 
-    oncePerDay: boolean; // 하루 1회 제한 기능
-    state: { 
-        totalCount: number; 
-        lastUsedDate: { [userIdHash: string]: string }; // 사용자별 마지막 사용 날짜 (YYYY-MM-DD)
-    }; 
+    oncePerDay: boolean; 
+    count: number; // 전체 실행 횟수 (countall)
+    userCounts: { [userIdHash: string]: number }; // 유저별 실행 횟수 (count)
+    lastUsedDate: { [userIdHash: string]: string }; // 유저별 마지막 실행 날짜
 }
 
 /**
- * CounterManager: 명령어 실행 횟수를 기록하고 통계를 관리합니다.
+ * CounterManager: 카운터의 실행 및 통계 저장을 담당합니다.
  */
 export class CounterManager {
     private counters: Counter[] = [];
@@ -26,7 +26,9 @@ export class CounterManager {
         this.variableProcessor = new VariableProcessor(bot as any);
         this.counters = (initialCounters || []).map(c => ({
             ...c,
-            state: c.state || { totalCount: 0, lastUsedDate: {} }
+            count: c.count || 0,
+            userCounts: c.userCounts || {},
+            lastUsedDate: c.lastUsedDate || {}
         }));
     }
 
@@ -36,21 +38,17 @@ export class CounterManager {
 
     private notify() {
         this.onStateChangeCallback();
+        // 상태 변경 시 즉시 저장 (비동기)
+        this.bot.saveAll();
     }
 
     public getCounters() { return this.counters; }
 
-    /**
-     * 특정 메시지가 카운터 트리거인지 확인
-     */
     public hasCounter(message: string): boolean {
         const msg = message?.trim();
         return this.counters.some(c => c.enabled && c.trigger === msg);
     }
 
-    /**
-     * 카운터 추가
-     */
     public addCounter(trigger: string, response: string, oncePerDay: boolean = false): boolean {
         if (this.counters.some(c => c.trigger === trigger)) return false;
         
@@ -60,22 +58,21 @@ export class CounterManager {
             response,
             enabled: true,
             oncePerDay,
-            state: { totalCount: 0, lastUsedDate: {} }
+            count: 0,
+            userCounts: {},
+            lastUsedDate: {}
         });
         this.notify();
         return true;
     }
 
-    /**
-     * 카운터 제거
-     */
     public removeCounter(trigger: string) {
         this.counters = this.counters.filter(c => c.trigger !== trigger);
         this.notify();
     }
 
     /**
-     * 카운터 로직 실행 및 응답
+     * 카운터 로직 실행
      */
     public async checkAndRespond(chat: ChatEvent, chzzkChat: ChzzkChat): Promise<void> {
         const msg = chat.message.trim();
@@ -87,26 +84,24 @@ export class CounterManager {
 
         // 하루 1회 제한 체크
         if (counter.oncePerDay) {
-            if (counter.state.lastUsedDate[userId] === today) {
-                // 이미 오늘 사용함 (무시 혹은 안내 메시지 선택 가능)
-                return;
-            }
+            if (counter.lastUsedDate[userId] === today) return;
         }
 
-        // 1. 상태 업데이트
-        counter.state.totalCount++;
-        counter.state.lastUsedDate[userId] = today;
+        // 카운트 증가
+        counter.count++; // 전체 카운트 증가
+        counter.userCounts[userId] = (counter.userCounts[userId] || 0) + 1; // 개인 카운트 증가
+        counter.lastUsedDate[userId] = today;
 
-        // 2. 변수 처리 및 전송
+        // 변수 처리 및 전송 (현재 카운터의 상태를 전달)
         try {
             const responseText = await this.variableProcessor.process(counter.response, { 
                 chat, 
-                commandState: counter.state 
+                counterState: counter // [핵심] 현재 카운터 정보 전달
             });
             await chzzkChat.sendChat(responseText);
-            this.notify();
+            this.notify(); // 변경된 카운트 저장
         } catch (err) {
-            console.error(`[CounterManager] Execution error for ${counter.trigger}:`, err);
+            console.error(`[CounterManager] Error:`, err);
         }
     }
 }

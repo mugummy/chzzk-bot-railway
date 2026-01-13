@@ -1,13 +1,10 @@
 import { ChatEvent } from 'chzzk';
 import { BotInstance } from './BotInstance';
 
-/**
- * VariableProcessor: 모든 특수 함수를 실시간 데이터로 치환합니다. (개인/전체 카운트 구분)
- */
 export class VariableProcessor {
     constructor(private bot: BotInstance) {}
 
-    public async process(text: string, context: { chat: ChatEvent, commandState?: any }): Promise<string> {
+    public async process(text: string, context: { chat: ChatEvent, commandState?: any, counterState?: any }): Promise<string> {
         let result = text;
         const userId = context.chat.profile.userIdHash;
 
@@ -24,29 +21,25 @@ export class VariableProcessor {
         result = result.replace(/\/title/g, live?.liveTitle || "제목 없음");
         result = result.replace(/\/category/g, live?.category || "미지정");
 
-        // [3] 시간 및 기간 관련
         if (live?.openDate) result = result.replace(/\/uptime/g, this.calculateUptime(live.openDate));
 
-        // 디데이 (/dday-YYYY-MM-DD)
-        const ddayMatch = result.match(/\/dday-(\d{4}-\d{2}-\d{2})/);
-        if (ddayMatch) {
-            const targetDate = new Date(ddayMatch[1]).getTime();
-            const diff = Math.floor((Date.now() - targetDate) / (1000 * 60 * 60 * 24));
-            result = result.replace(ddayMatch[0], `${Math.abs(diff)}`);
-        }
-
-        // [4] 카운터 로직 보정 (/count vs /countall)
-        if (context.commandState) {
-            // 개인 카운트 (/count)
+        // [3] 카운터 처리 (/count, /countall)
+        // 카운터 실행 시 (counterState 존재)
+        if (context.counterState) {
+            const userCount = context.counterState.userCounts?.[userId] || 0;
+            const totalCount = context.counterState.count || 0;
+            result = result.replace(/\/countall/g, String(totalCount)); // 전체 횟수
+            result = result.replace(/\/count/g, String(userCount));    // 개인 횟수
+        } 
+        // 일반 명령어 실행 시 (commandState 존재)
+        else if (context.commandState) {
             const userCount = context.commandState.userCounts?.[userId] || 0;
-            result = result.replace(/\/count/g, String(userCount));
-            
-            // 통합 카운트 (/countall)
             const totalCount = context.commandState.totalCount || 0;
             result = result.replace(/\/countall/g, String(totalCount));
+            result = result.replace(/\/count/g, String(userCount));
         }
 
-        // [5] 랜덤 함수 (/random)
+        // [4] 랜덤 함수
         if (result.includes('/random')) {
             const parts = result.split('/random');
             result = parts[Math.floor(Math.random() * parts.length)].trim();
