@@ -57,7 +57,13 @@ export class DataManager {
                 acc[p.user_id_hash] = { nickname: p.nickname, points: p.amount, lastMessageTime: p.last_chat_at ? new Date(p.last_chat_at).getTime() : 0 };
                 return acc;
             }, {}),
-            commands: (cmds.data || []).map(c => ({ trigger: c.triggers[0], triggers: c.triggers, response: c.response, enabled: c.enabled })),
+            commands: (cmds.data || []).map(c => ({ 
+                trigger: c.triggers[0], 
+                triggers: c.triggers, 
+                response: c.response, 
+                enabled: c.enabled,
+                state: { totalCount: 0, userCounts: {} } 
+            })),
             macros: (macs.data || []).map(m => ({ id: m.id, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
             counters: (cnts.data || []).map(c => ({ trigger: c.trigger, response: c.response, enabled: c.enabled, oncePerDay: c.once_per_day, state: { totalCount: c.count, lastUsedDate: {} } })),
             votes: db.current_vote ? [db.current_vote] : [],
@@ -76,26 +82,27 @@ export class DataManager {
     }
 
     static async saveData(channelId: string, data: BotData): Promise<void> {
-        if (this.saveTimeouts.has(channelId)) clearTimeout(this.saveTimeouts.get(channelId)!);
-        this.saveTimeouts.set(channelId, setTimeout(async () => {
-            this.saveTimeouts.delete(channelId);
-            await this.executeSave(channelId, data);
-        }, 500));
-    }
-
-    private static async executeSave(channelId: string, data: BotData): Promise<void> {
+        console.log(`[DataManager] Saving all data for channel: ${channelId}...`);
+        
         try {
-            await supabase.from('channels').update({
-                settings: data.settings,
-                overlay_settings: data.overlaySettings || {},
-                song_queue: data.songQueue || [],
-                current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
-                participation_data: data.participants,
-                greet_settings: data.greetData?.settings,
-                greet_history: data.greetData?.history,
-                updated_at: new Date().toISOString()
-            }).eq('channel_id', channelId);
+            // 1. 채널 메타데이터 업데이트 (update 사용 - 세션 컬럼 보존)
+            const { error: channelError } = await supabase
+                .from('channels')
+                .update({
+                    settings: data.settings,
+                    overlay_settings: data.overlaySettings || {},
+                    song_queue: data.songQueue || [],
+                    current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
+                    participation_data: data.participants,
+                    greet_settings: data.greetData?.settings,
+                    greet_history: data.greetData?.history,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('channel_id', channelId);
 
+            if (channelError) throw channelError;
+
+            // 2. 명령어/매크로/카운터 저장
             await Promise.all([
                 (async () => {
                     await supabase.from('commands').delete().eq('channel_id', channelId);
@@ -122,6 +129,9 @@ export class DataManager {
                     }
                 })()
             ]);
-        } catch (error) { console.error(`[DataManager] Error:`, error); }
+            console.log(`[DataManager] Successfully saved all data for ${channelId}`);
+        } catch (error) {
+            console.error(`[DataManager] Critical Error saving data for ${channelId}:`, error);
+        }
     }
 }

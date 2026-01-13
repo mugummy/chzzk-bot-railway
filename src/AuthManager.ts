@@ -68,15 +68,6 @@ export class AuthManager {
                 channel_id: session.user.channelId,
                 session_id: session.sessionId,
                 session_data: session,
-                settings: {
-                    chatEnabled: true,
-                    songRequestMode: 'all',
-                    songRequestCooldown: 30,
-                    minDonationAmount: 0,
-                    pointsPerChat: 1,
-                    pointsCooldown: 60,
-                    pointsName: '포인트'
-                },
                 updated_at: new Date().toISOString()
             });
         
@@ -148,19 +139,20 @@ export class AuthManager {
     }
 
     public async validateSession(sessionId: string): Promise<AuthSession | null> {
-        const session = await this.getSessionFromDB(sessionId);
+        let session = await this.getSessionFromDB(sessionId);
+        
         if (!session) {
-            console.log(`[AuthManager] Session not found in DB: ${sessionId}`);
+            console.log(`[AuthManager] Session not found initially: ${sessionId}. Retrying in 1s...`);
+            await new Promise(r => setTimeout(r, 1000));
+            session = await this.getSessionFromDB(sessionId);
+        }
+
+        if (!session) {
+            console.log(`[AuthManager] Session still not found in DB after retry: ${sessionId}`);
             return null;
         }
 
-        // 임시 조치: 만료 시간 무시하고 무조건 통과 (로그인 문제 해결용)
-        // const now = Date.now();
-        // console.log(`[AuthManager] Validating session: ${sessionId}, Expires: ${new Date(session.tokens.expiresAt).toISOString()}, Now: ${new Date(now).toISOString()}`);
-
-        // if (session.tokens.refreshExpiresAt > 0 && session.tokens.refreshExpiresAt < now) { ... }
-        // if (session.tokens.expiresAt < now) { ... }
-
+        console.log(`[AuthManager] Session validated: ${session.user.channelName} (${sessionId})`);
         return session;
     }
 

@@ -134,6 +134,11 @@ export class CommandManager {
         
         if (!command) return;
         
+        // 안전 장치: state가 없으면 초기화
+        if (!command.state) {
+            command.state = { totalCount: 0, userCounts: {} };
+        }
+        
         command.state.totalCount = (command.state.totalCount || 0) + 1; 
         command.state.userCounts = command.state.userCounts || {}; 
         command.state.userCounts[chat.profile.userIdHash] = (command.state.userCounts[chat.profile.userIdHash] || 0) + 1; 
