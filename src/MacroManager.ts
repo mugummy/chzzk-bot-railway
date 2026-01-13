@@ -3,14 +3,12 @@ import { BotInstance } from './BotInstance';
 
 export interface Macro {
     id: string;
+    title: string; // [추가] 매크로 이름
     message: string;
     interval: number; // minutes
     enabled: boolean;
 }
 
-/**
- * MacroManager: 주기적으로 채팅을 전송하는 매크로 기능을 관리합니다.
- */
 export class MacroManager {
     private macros: Macro[] = [];
     private timers: Map<string, NodeJS.Timeout> = new Map();
@@ -18,7 +16,10 @@ export class MacroManager {
     private onStateChangeCallback: () => void = () => {};
 
     constructor(private bot: BotInstance, initialMacros: any[]) {
-        this.macros = initialMacros || [];
+        this.macros = (initialMacros || []).map(m => ({
+            ...m,
+            title: m.title || '매크로' // 기존 데이터 호환
+        }));
     }
 
     public setOnStateChangeListener(callback: () => void) {
@@ -32,36 +33,38 @@ export class MacroManager {
 
     private notify() {
         this.onStateChangeCallback();
+        this.bot.saveAll();
     }
 
     public getMacros() { return this.macros; }
 
-    /**
-     * 매크로 추가
-     */
-    public addMacro(interval: number, message: string) {
+    public addMacro(interval: number, message: string, title: string = '새 매크로') {
         const id = `mac_${Date.now()}`;
-        const newMacro: Macro = { id, message, interval, enabled: true };
+        const newMacro: Macro = { id, title, message, interval, enabled: true };
         this.macros.push(newMacro);
         this.startMacro(newMacro);
         this.notify();
     }
 
-    /**
-     * 매크로 제거
-     */
+    public updateMacro(id: string, interval: number, message: string, title: string) {
+        this.stopMacro(id);
+        const index = this.macros.findIndex(m => m.id === id);
+        if (index > -1) {
+            this.macros[index] = { ...this.macros[index], interval, message, title };
+            this.startMacro(this.macros[index]);
+            this.notify();
+        }
+    }
+
     public removeMacro(id: string) {
         this.stopMacro(id);
         this.macros = this.macros.filter(m => m.id !== id);
         this.notify();
     }
 
-    /**
-     * 개별 매크로 시작
-     */
     private startMacro(macro: Macro) {
         if (!macro.enabled || !this.chatClient) return;
-        this.stopMacro(macro.id); // 기존 타이머가 있다면 제거
+        this.stopMacro(macro.id);
 
         const timer = setInterval(() => {
             if (this.chatClient?.connected) {
@@ -72,9 +75,6 @@ export class MacroManager {
         this.timers.set(macro.id, timer);
     }
 
-    /**
-     * 개별 매크로 중지
-     */
     private stopMacro(id: string) {
         if (this.timers.has(id)) {
             clearInterval(this.timers.get(id)!);
@@ -82,9 +82,6 @@ export class MacroManager {
         }
     }
 
-    /**
-     * 모든 매크로 재시작 (설정 변경 시 등)
-     */
     private restartAllMacros() {
         this.stopAllMacros();
         this.macros.forEach(m => this.startMacro(m));

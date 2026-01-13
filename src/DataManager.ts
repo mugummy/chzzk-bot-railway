@@ -34,7 +34,7 @@ export class DataManager {
             votes: db.current_vote ? [db.current_vote] : [],
             participants: db.participation_data || { queue: [], active: [], isActive: false, max: 10 },
             commands: (cmds.data || []).map(c => ({ id: c.id, triggers: c.triggers, response: c.response, enabled: c.enabled })),
-            macros: (macs.data || []).map(m => ({ id: m.id, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
+            macros: (macs.data || []).map(m => ({ id: m.id, title: m.title, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
             counters: (cnts.data || []).map(c => ({ trigger: c.trigger, response: c.response, enabled: c.enabled, once_per_day: c.once_per_day, count: c.count })),
             points: (pts.data || []).reduce((acc: any, p: any) => {
                 acc[p.user_id_hash] = { nickname: p.nickname, points: p.amount, lastMessageTime: p.last_chat_at ? new Date(p.last_chat_at).getTime() : 0 };
@@ -106,7 +106,7 @@ export class DataManager {
         if (items.length) {
             const payload = items.map(i => {
                 if (table === 'commands') return { channel_id: channelId, triggers: i.triggers, response: i.response, enabled: i.enabled };
-                if (table === 'macros') return { channel_id: channelId, message: i.message, interval_minutes: i.interval, enabled: i.enabled };
+                if (table === 'macros') return { channel_id: channelId, title: i.title, message: i.message, interval_minutes: i.interval, enabled: i.enabled };
                 if (table === 'counters') return { channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay };
             });
             await supabase.from(table).insert(payload);

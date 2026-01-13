@@ -10,33 +10,36 @@ export interface Song {
     requestedAt: number;
 }
 
+/**
+ * SongManager: 재생 상태(isPlaying)와 현재 곡을 영구적으로 관리합니다.
+ */
 export class SongManager {
     private queue: Song[] = [];
     private currentSong: Song | null = null;
-    private onStateChangeCallback: () => void = () => {};
-    private isPlayerConnected: boolean = false;
-    private userCooldowns: Map<string, number> = new Map();
+    private isPlaying: boolean = false; // [추가] 재생/일시정지 상태 추적
+    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(private bot: BotInstance, initialData: any) {
         this.queue = initialData.songQueue || [];
         this.currentSong = initialData.currentSong || null;
+        // DB에서 이전 재생 상태를 불러올 수도 있지만, 안전을 위해 초기값은 false로 설정
     }
 
-    public setOnStateChangeListener(callback: () => void) {
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
-    private notify() { 
-        this.onStateChangeCallback();
+    private notify(type: string = 'songStateUpdate') { 
+        this.onStateChangeCallback(type, this.getState());
         this.bot.saveAll(); 
     }
 
-    public getState() { return { queue: this.queue, currentSong: this.currentSong }; }
-
-    public setPlayerConnected(connected: boolean) {
-        this.isPlayerConnected = connected;
-        if (connected && !this.currentSong && this.queue.length > 0) this.playNext();
-        else if (connected && this.currentSong) this.notify();
+    public getState() { 
+        return { 
+            queue: this.queue, 
+            currentSong: this.currentSong,
+            isPlaying: this.isPlaying 
+        }; 
     }
 
     public async handleCommand(chat: ChatEvent, chzzkChat: ChzzkChat, settings: any) {
@@ -46,120 +49,80 @@ export class SongManager {
         const subCmd = parts[1];
 
         if (cmd !== '!노래') return;
-
         if (settings.songRequestMode === 'off') return;
 
         if (!subCmd || subCmd === '도움말') {
-            return chzzkChat.sendChat('🎵 [도움말] !노래 신청 [링크], !노래 스킵, !노래 대기열');
+            return chzzkChat.sendChat('🎵 [명령어] !노래 신청 [링크], !노래 스킵, !노래 대기열');
         }
 
         if (subCmd === '신청') {
-            if (settings.songRequestMode === 'donation') {
-                return chzzkChat.sendChat(`💸 현재 ${settings.minDonationAmount}치즈 후원으로만 신청 가능합니다.`);
-            }
-
-            const query = parts.slice(2).join(' ');
-            // [수정] 채팅 신청 시에도 링크 검증 강화
-            if (!this.isValidYoutubeLink(query)) {
-                return chzzkChat.sendChat('❌ 올바른 유튜브 링크를 포함해주세요.');
-            }
-
-            if (settings.songRequestMode === 'cooldown') {
-                const lastTime = this.userCooldowns.get(chat.profile.userIdHash) || 0;
-                const now = Date.now();
-                const cooldownMs = (settings.songRequestCooldown || 30) * 1000;
-                if (now - lastTime < cooldownMs) {
-                    const remaining = Math.ceil((cooldownMs - (now - lastTime)) / 1000);
-                    return chzzkChat.sendChat(`⏳ 쿨타임! ${remaining}초 뒤에 가능합니다.`);
-                }
-                this.userCooldowns.set(chat.profile.userIdHash, now);
-            }
+            if (settings.songRequestMode === 'donation') return chzzkChat.sendChat(`💸 후원으로만 신청 가능합니다.`);
             
+            const query = parts.slice(2).join(' ');
+            if (!this.isValidYoutubeLink(query)) return chzzkChat.sendChat('❌ 올바른 링크를 입력하세요.');
+
             try {
                 const song = await this.fetchSongInfo(query, chat.profile.nickname);
                 this.queue.push(song);
-                this.notify();
-                chzzkChat.sendChat(`✅ 대기열 추가: ${song.title}`);
-                if (this.isPlayerConnected && !this.currentSong && this.queue.length === 1) this.playNext();
-            } catch (err) { chzzkChat.sendChat('❌ 영상 정보를 가져올 수 없습니다.'); }
+                chzzkChat.sendChat(`✅ 추가됨: ${song.title}`);
+                
+                // [수정] 현재 재생 중인 곡이 없다면 즉시 재생 시작
+                if (!this.currentSong) {
+                    this.playNext();
+                } else {
+                    this.notify();
+                }
+            } catch (err) { chzzkChat.sendChat('❌ 정보를 가져올 수 없습니다.'); }
         } 
-        // ... (나머지 스킵, 대기열 로직 동일)
         else if (subCmd === '스킵') {
-            const role = chat.profile.userRoleCode;
-            if (role === 'streamer' || role === 'manager' || chat.profile.badge?.imageUrl?.includes('manager')) {
+            if (chat.profile.userRoleCode === 'streamer' || chat.profile.userRoleCode === 'manager') {
                 this.skipSong();
                 chzzkChat.sendChat('⏭️ 스킵되었습니다.');
-            } else { chzzkChat.sendChat('🛡️ 권한이 없습니다.'); }
-        } 
+            }
+        }
         else if (subCmd === '대기열') {
-            if (this.queue.length === 0) return chzzkChat.sendChat('📜 대기열 없음');
             const list = this.queue.slice(0, 3).map((s, i) => `${i+1}. ${s.title}`).join(' / ');
-            chzzkChat.sendChat(`📜 대기열: ${list}...`);
+            chzzkChat.sendChat(list ? `📜 대기열: ${list}...` : '📜 대기열이 비어있습니다.');
         }
     }
 
-    // [중요] 링크 유효성 체크 도우미
     private isValidYoutubeLink(text: string): boolean {
-        const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-        return youtubeRegex.test(text);
+        return /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/.test(text);
     }
 
-    /**
-     * [최종 수정] 후원 메시지 정밀 처리
-     */
     public async addSongFromDonation(donation: DonationEvent, message: string, settings: any) {
-        if (settings.songRequestMode === 'off') return;
-
-        // [핵심] 정확히 설정한 금액일 때만 작동 (Exact Match)
-        if (donation.payAmount !== (settings.minDonationAmount || 0)) {
-            console.log(`[Song] Donation amount mismatch: expected ${settings.minDonationAmount}, got ${donation.payAmount}`);
-            return;
-        }
-
-        // [핵심] 링크 추출
-        const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/;
-        const match = message.match(youtubeRegex);
-
-        // 링크가 없으면 단호하게 무시
-        if (!match || !match[1]) {
-            console.log('[Song] No valid link found in donation message. Ignoring.');
-            return;
-        }
-
-        try {
-            const song = await this.fetchSongInfo(match[1], donation.profile.nickname);
-            this.queue.push(song);
-            this.notify();
-            if (this.bot.chat) this.bot.chat.sendChat(`💰 후원 신청곡이 수락되었습니다: ${song.title}`);
-            if (this.isPlayerConnected && !this.currentSong && this.queue.length === 1) this.playNext();
-        } catch (err) {
-            console.error('[Song] Donation fetch failed:', err);
+        if (donation.payAmount !== (settings.minDonationAmount || 0)) return;
+        const match = message.match(/(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+        if (match && match[1]) {
+            try {
+                const song = await this.fetchSongInfo(match[1], donation.profile.nickname);
+                this.queue.push(song);
+                if (this.bot.chat) this.bot.chat.sendChat(`💰 후원 곡 추가: ${song.title}`);
+                if (!this.currentSong) this.playNext();
+                else this.notify();
+            } catch (err) {}
         }
     }
 
-    private async fetchSongInfo(query: string, requester: string): Promise<Song> {
-        let videoId = query;
-        if (query.includes('youtu')) {
-            try { videoId = ytdl.getURLVideoID(query); } catch { throw new Error('Invalid URL'); }
-        }
-        try {
-            const info = await ytdl.getBasicInfo(videoId);
-            return {
-                videoId,
-                title: info.videoDetails.title,
-                thumbnail: info.videoDetails.thumbnails[0]?.url,
-                requester,
-                requestedAt: Date.now()
-            };
-        } catch (err) { throw new Error('Info Error'); }
+    private async fetchSongInfo(videoId: string, requester: string): Promise<Song> {
+        const info = await ytdl.getBasicInfo(videoId);
+        return {
+            videoId,
+            title: info.videoDetails.title,
+            thumbnail: info.videoDetails.thumbnails[0]?.url,
+            requester,
+            requestedAt: Date.now()
+        };
     }
 
     public playNext() {
         if (this.queue.length > 0) {
             this.currentSong = this.queue.shift() || null;
+            this.isPlaying = true; // 새 곡 시작 시 무조건 재생 상태
             this.notify();
         } else {
             this.currentSong = null;
+            this.isPlaying = false;
             this.notify();
         }
     }
@@ -173,6 +136,13 @@ export class SongManager {
         }
     }
 
-    public togglePlayPause() { this.notify(); }
-    public getData() { return { songQueue: this.queue, currentSong: this.currentSong }; }
+    // [중요] 대시보드 버튼과 플레이어를 이어주는 핵심 로직
+    public togglePlayPause() {
+        this.isPlaying = !this.isPlaying;
+        // 플레이어에게 직접 재생/일시정지 명령을 내리기 위해 별도 타입 전송
+        this.onStateChangeCallback('playerControl', { action: this.isPlaying ? 'play' : 'pause' });
+        this.notify();
+    }
+
+    public getData() { return { songQueue: this.queue, currentSong: this.currentSong, isPlaying: this.isPlaying }; }
 }
