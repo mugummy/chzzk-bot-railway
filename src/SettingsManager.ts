@@ -1,45 +1,61 @@
-
+/**
+ * SettingsManager: 봇의 모든 전역 설정을 관리합니다.
+ * 상태 변경 시 자동으로 BotInstance에 알림을 보냅니다.
+ */
 export interface BotSettings {
     chatEnabled: boolean;
-    songRequestCommand: string; // 추가: !신청곡 등
-    songRequestResponse: string; // 추가: 응답 문구
     songRequestMode: 'all' | 'cooldown' | 'donation' | 'off';
     songRequestCooldown: number;
     minDonationAmount: number;
-    maxSongLength: number;
-    maxQueueSize: number;
     pointsPerChat: number;
     pointsCooldown: number;
     pointsName: string;
+    participationCommand: string;
+    maxParticipants: number;
 }
 
 export const defaultSettings: BotSettings = {
     chatEnabled: true,
-    songRequestCommand: '!신청곡',
-    songRequestResponse: '{user}님, {song} 를 신청곡 리스트에 추가했어요!',
     songRequestMode: 'all',
     songRequestCooldown: 30,
-    minDonationAmount: 1000,
-    maxSongLength: 10,
-    maxQueueSize: 50,
+    minDonationAmount: 0,
     pointsPerChat: 1,
     pointsCooldown: 60,
-    pointsName: '포인트'
+    pointsName: '포인트',
+    participationCommand: '!시참',
+    maxParticipants: 10
 };
 
 export class SettingsManager {
-    private settings: BotSettings = defaultSettings;
+    private settings: BotSettings;
+    private onStateChangeCallback: () => void = () => {};
 
-    constructor(initialSettings: BotSettings) {
+    constructor(initialSettings?: Partial<BotSettings>) {
         this.settings = { ...defaultSettings, ...initialSettings };
     }
 
-    getSettings(): BotSettings {
+    public setOnStateChangeListener(callback: () => void) {
+        this.onStateChangeCallback = callback;
+    }
+
+    private notify() {
+        this.onStateChangeCallback();
+    }
+
+    public getSettings(): BotSettings {
         return this.settings;
     }
 
-    updateSettings(newSettings: Partial<BotSettings>): void {
+    /**
+     * 설정 업데이트 및 동기화 발생
+     */
+    public updateSettings(newSettings: Partial<BotSettings>) {
         this.settings = { ...this.settings, ...newSettings };
-        // DataManager.saveData는 Bot.ts의 saveAllData에서 처리
+        this.notify();
+    }
+
+    public toggleChat(enabled: boolean) {
+        this.settings.chatEnabled = enabled;
+        this.notify();
     }
 }
