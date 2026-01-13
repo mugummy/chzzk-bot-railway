@@ -16,7 +16,6 @@ const port = typeof config.port === 'string' ? parseInt(config.port) : config.po
 const authManager = new AuthManager(config.chzzk.clientId, config.chzzk.clientSecret, config.chzzk.redirectUri);
 const botManager = BotManager.getInstance();
 
-// 채팅 기록 메모리 캐시
 const channelChatHistory: Map<string, any[]> = new Map();
 
 app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentials: true }));
@@ -57,8 +56,22 @@ wss.on('connection', async (ws, req) => {
         clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
 
-    const sendFullState = async (bot: any) => {
+    // [개선] 봇의 전체 상태 및 최신 라이브 정보를 한 번에 보내는 함수
+    const sendStateWithLiveInfo = async (bot: any) => {
         if (!bot) return;
+        
+        // 1. 치지직에서 최신 정보를 강제로 가져옴
+        await bot.refreshLiveInfo();
+        
+        // 2. 채널 기본 정보 및 라이브 정보 전송
+        ws.send(JSON.stringify({ 
+            type: 'connectResult', 
+            success: true, 
+            channelInfo: bot.getChannelInfo(),
+            liveStatus: bot.getLiveStatus()
+        }));
+
+        // 3. 나머지 설정값 전송
         ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
         ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
         ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
@@ -67,20 +80,13 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
         ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
         ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
-        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
-        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
         
-        const history = channelChatHistory.get(channelId) || [];
-        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: history }));
-
-        // [안전 장치] 랭킹 로드 실패 시 빈 배열 전송
+        // 과거 기록 전송
+        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: channelChatHistory.get(channelId) || [] }));
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
             ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
-        } catch (e) {
-            console.error('[WS] Ranking Load Error:', e);
-            ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: [] }));
-        }
+        } catch (e) {}
     };
 
     ws.on('message', async (message) => {
@@ -92,7 +98,7 @@ wss.on('connection', async (ws, req) => {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
                 
                 bot.setOnStateChangeListener((type, payload) => {
-                    bot?.saveAll();
+                    bot?.saveAll(); 
                     broadcast(type, payload);
                 });
                 
@@ -104,14 +110,8 @@ wss.on('connection', async (ws, req) => {
                     broadcast('newChat', chat);
                 });
 
-                ws.send(JSON.stringify({ 
-                    type: 'connectResult', 
-                    success: true, 
-                    channelInfo: bot.getChannelInfo(),
-                    liveStatus: bot.getLiveStatus()
-                }));
-                
-                await sendFullState(bot);
+                // 연결 시 최신 정보와 함께 전체 상태 전송
+                await sendStateWithLiveInfo(bot);
                 return;
             }
 
@@ -119,25 +119,19 @@ wss.on('connection', async (ws, req) => {
 
             switch (data.type) {
                 case 'requestData':
-                    await sendFullState(bot);
-                    ws.send(JSON.stringify({ 
-                        type: 'connectResult', 
-                        success: true, 
-                        channelInfo: bot.getChannelInfo(),
-                        liveStatus: bot.getLiveStatus()
-                    }));
+                    // 명시적 요청 시 최신 정보 강제 갱신 후 전송
+                    await sendStateWithLiveInfo(bot);
                     break;
 
+                // 나머지 액션 핸들러들...
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
+                case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
-                case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'addCounter': bot.counters.addCounter(data.data.trigger, data.data.response, data.data.oncePerDay); break;
                 case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
                 case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
-                case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
-
                 case 'toggleCommand': 
                     const tCmd = bot.commands.getCommands().find(c => (c.triggers?.[0] || (c as any).trigger) === data.data.trigger);
                     if (tCmd) { tCmd.enabled = data.data.enabled; bot.saveAll(); broadcast('commandsUpdate', bot.commands.getCommands()); }
@@ -150,7 +144,6 @@ wss.on('connection', async (ws, req) => {
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
                     if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
                     break;
-
                 case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
                 case 'executeDraw': 
                     const winners = bot.draw.draw(data.payload.count);
@@ -165,23 +158,22 @@ wss.on('connection', async (ws, req) => {
                     const rWinner = bot.roulette.spin();
                     if (rWinner) broadcast('drawWinnerResult', { winners: [{ nickname: rWinner.text, userIdHash: 'roulette' }] });
                     break;
-                case 'resetRoulette': bot.roulette.reset(); break;
-                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
-                case 'startVote': bot.votes.startVote(); break;
-                case 'endVote': bot.votes.endVote(); break;
-                case 'resetVote': bot.votes.resetVote(); break;
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;
                 case 'clearParticipants': bot.participation.clearAllData(); break;
                 case 'updateGreetSettings': bot.greet.updateSettings(data.data); break;
                 case 'resetGreetHistory': bot.greet.clearHistory(); break;
+                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
+                case 'startVote': bot.votes.startVote(); break;
+                case 'endVote': bot.votes.endVote(); break;
+                case 'resetVote': bot.votes.resetVote(); break;
                 case 'controlMusic':
                     if (data.action === 'skip') bot.songs.skipSong();
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] Error:', err); }
+        } catch (err) { console.error('[WS] System Error:', err); }
     });
 
     ws.on('close', () => {
@@ -190,4 +182,4 @@ wss.on('connection', async (ws, req) => {
     });
 });
 
-server.listen(port, '0.0.0.0', () => console.log(`✅ gummybot Server Online: Port ${port}`));
+server.listen(port, '0.0.0.0', () => console.log(`✅ gummybot Online: Port ${port}`));
