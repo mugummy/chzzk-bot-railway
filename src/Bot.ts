@@ -1,11 +1,11 @@
-// src/Bot.ts
+// src/Bot.ts - Refined Controller
 
 import { ChzzkClient, ChzzkChat, ChatEvent, LiveDetail, Channel, DonationEvent } from 'chzzk';
 import { config } from './config';
 import { CommandManager } from './CommandManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
-import { DataManager, OverlaySettings, defaultOverlaySettings } from './DataManager';
+import { DataManager, BotData } from './DataManager';
 import { ParticipationManager } from './ParticipationManager';
 import { SongManager } from './SongManager';
 import { PointManager } from './PointManager';
@@ -31,8 +31,8 @@ export class ChatBot {
     public drawManager!: DrawManager;
     public rouletteManager!: RouletteManager;
     
-    public settings: BotSettings = defaultSettings; // Initialize with defaults
-    public overlaySettings: OverlaySettings = defaultOverlaySettings;
+    public settings: BotSettings = defaultSettings;
+    public overlaySettings: any = {};
     private channelId: string = '';
     private onChatCallback: ((chat: ChatEvent) => void) | null = null;
     private onConnectCallback: (() => void) | null = null;
@@ -41,66 +41,42 @@ export class ChatBot {
     public channel: Channel | null = null;
     private botUserIdHash: string | null = null;
 
-    private hasConnected: boolean = false;
-
     constructor(private channelIdOrName: string) {
         this.client = new ChzzkClient({ nidAuth: config.nidAuth, nidSession: config.nidSes });
-        this.channelId = channelIdOrName; // 초기값 설정 (나중에 connect에서 갱신됨)
     }
 
-    public async init(): Promise<void> {
-        // 채널 ID가 아직 확정되지 않았을 수 있으므로 connect 시점에 로드하거나,
-        // 생성자에서 ID를 받는 경우 바로 로드합니다.
-        // 여기서는 connect() 호출 전에는 기본값만 가집니다.
-        console.log('[Bot] Initialized instance.');
-    }
+    public async init(): Promise<void> {}
 
-    // 실제 데이터 로드는 채널 ID가 확인된 후 connect()에서 수행
     private async loadChannelData(realChannelId: string) {
-        console.log(`[Bot] 데이터 로딩 시작 (Channel: ${realChannelId})...`);
-        const loadedData = await DataManager.loadData(realChannelId);
-
-        this.settingsManager = new SettingsManager(loadedData.settings);
+        const data = await DataManager.loadData(realChannelId);
+        this.settingsManager = new SettingsManager(data.settings);
         this.settings = this.settingsManager.getSettings();
-        this.overlaySettings = loadedData.overlaySettings || defaultOverlaySettings;
+        this.overlaySettings = data.overlaySettings;
 
-        this.commandManager = new CommandManager(this, loadedData.commands);
-        this.counterManager = new CounterManager(this, loadedData.counters);
-        this.macroManager = new MacroManager(this, loadedData.macros);
-        this.participationManager = new ParticipationManager(this, loadedData.participants);
-        this.songManager = new SongManager(this, loadedData);
-        this.pointManager = new PointManager(loadedData.points);
-        this.voteManager = new VoteManager(this, loadedData.votes);
-        this.drawManager = new DrawManager(this, loadedData.drawHistory);
-        this.rouletteManager = new RouletteManager(this, loadedData.rouletteHistory);
+        this.commandManager = new CommandManager(this, data.commands);
+        this.counterManager = new CounterManager(this, data.counters);
+        this.macroManager = new MacroManager(this, data.macros);
+        this.participationManager = new ParticipationManager(this, data.participants);
+        this.songManager = new SongManager(this, data);
+        this.pointManager = new PointManager(data.points);
+        this.voteManager = new VoteManager(this, data.votes);
+        this.drawManager = new DrawManager(this, []);
+        this.rouletteManager = new RouletteManager(this, []);
 
+        // Listeners for broadcasting
         this.participationManager.setOnStateChangeListener(() => this.notifyStateChange('participation'));
         this.songManager.setOnStateChangeListener(() => this.notifyStateChange('song'));
         this.voteManager.setOnStateChangeListener(() => this.notifyStateChange('vote'));
         this.drawManager.setOnStateChangeListener(() => this.notifyStateChange('draw'));
         this.rouletteManager.setOnStateChangeListener(() => this.notifyStateChange('roulette'));
         this.pointManager.setOnStateChangeListener(() => this.notifyStateChange('points'));
-        console.log('[Bot] 데이터 로딩 완료.');
     }
 
-    private notifyStateChange(type: string) { if (this.onStateChangeCallbacks[type]) { this.onStateChangeCallbacks[type](); } }
+    private notifyStateChange(type: string) { this.onStateChangeCallbacks[type]?.(); }
     public setOnStateChangeListener(type: string, listener: StateListener) { this.onStateChangeCallbacks[type] = listener; }
     
     public saveAllData(): void { 
-        if (!this.channelId) {
-            console.warn('[Bot] Save blocked: No Channel ID');
-            return;
-        }
-
-        // 임시 방편: 채널 ID가 너무 짧거나 이상하면 저장 거부 (보안 강화)
-        if (this.channelId.length < 5) {
-             console.warn('[Bot] Save blocked: Invalid Channel ID', this.channelId);
-             return;
-        }
-
-        const participantState = this.participationManager?.getState();
-        if (!participantState) return;
-
+        if (!this.channelId) return;
         DataManager.saveData(this.channelId, {
             ...this.songManager.getData(),
             commands: this.commandManager.getCommands(),
@@ -109,248 +85,90 @@ export class ChatBot {
             points: this.pointManager.getPointsData(),
             settings: this.settings,
             votes: this.voteManager.getVotes(),
-            participants: {
-                queue: participantState.queue,
-                participants: participantState.participants,
-                maxParticipants: participantState.maxParticipants,
-                isParticipationActive: participantState.isParticipationActive,
-                userParticipationHistory: participantState.userParticipationHistory
-            },
-            drawHistory: this.drawManager.getDrawHistory(),
-            rouletteHistory: this.rouletteManager.getRouletteHistory(),
+            participants: this.participationManager.getState(),
             overlaySettings: this.overlaySettings
-        }).catch(error => {
-            console.error('[Bot] Error saving data:', error);
-        }); 
+        });
     }
     
     public updateSettings(newSettings: Partial<BotSettings>) { 
-        console.log('[Bot] Updating settings:', newSettings);
+        const isChatToggle = newSettings.chatEnabled !== undefined && this.settings.chatEnabled !== newSettings.chatEnabled;
+        this.settingsManager.updateSettings(newSettings); 
+        this.settings = this.settingsManager.getSettings(); 
         
-        // 채팅 활성화/비활성화 알림
-        if (newSettings.chatEnabled !== undefined && this.settings.chatEnabled !== newSettings.chatEnabled) {
-            const isEnabled = newSettings.chatEnabled;
-            const msg = isEnabled ? '🤖 봇이 활성화되었습니다!' : '👋 봇이 비활성화되었습니다.';
-            
-            if (this.chat && this.isConnected()) {
-                // 비활성화될 때는 sendChat이 막히므로 직접 호출
-                if (isEnabled) {
-                    this.sendChat(msg);
-                } else {
-                    try { this.chat.sendChat(msg); } catch (e) {}
-                }
-            }
+        if (isChatToggle) {
+            const msg = this.settings.chatEnabled ? '🤖 봇이 활성화되었습니다!' : '👋 봇이 비활성화되었습니다.';
+            try { this.chat?.sendChat(msg); } catch(e){}
         }
-
-        if(this.settingsManager) {
-            this.settingsManager.updateSettings(newSettings); 
-            this.settings = this.settingsManager.getSettings(); 
-            console.log('[Bot] New settings state:', this.settings);
-            this.saveAllData(); 
-        }
+        
+        this.saveAllData(); 
+        this.notifyStateChange('settings');
     }
     
-    public updateOverlaySettings(newSettings: Partial<OverlaySettings>) {
+    public updateOverlaySettings(newSettings: any) {
         this.overlaySettings = { ...this.overlaySettings, ...newSettings };
         this.saveAllData();
         this.notifyStateChange('overlay');
     }
 
-    public getClient(): ChzzkClient { return this.client; }
-    public getChannelId(): string { return this.channelId; }
-    public isConnected(): boolean { return this.chat?.connected ?? false; }
-    public setOnConnectListener(listener: () => void) { this.onConnectCallback = listener; }
-    public setOnChatListener(listener: (chat: ChatEvent) => void) { this.onChatCallback = listener; }
     public sendChat(message: string) { 
-        if (!this.settings.chatEnabled) {
-            console.log('[Bot] Chat disabled, skipped message:', message);
-            return;
-        }
-
-        if (this.chat && this.isConnected()) { 
-            try {
-                this.chat.sendChat(message); 
-            } catch (e) {
-                console.log('[Bot] Failed to send chat (not logged in):', message);
-            }
-        } else {
-            console.log('[Bot] Cannot send chat - not connected');
+        if (this.settings.chatEnabled && this.chat?.connected) { 
+            try { this.chat.sendChat(message); } catch (e) {}
         }
     }
 
     public async connect(): Promise<void> {
         try {
-            if (this.chat && this.isConnected()) {
-                await this.disconnect();
+            if (/^[a-f0-9]{32}$/.test(this.channelIdOrName)) this.channelId = this.channelIdOrName;
+            else {
+                const search = await this.client.search.channels(this.channelIdOrName);
+                if (!search.channels[0]) throw new Error('Channel Not Found');
+                this.channelId = search.channels[0].channelId;
             }
-
-            console.log(`[Bot] 연결 시도: ${this.channelIdOrName}`);
-            // 채널 ID 확정
-            if (/^[a-f0-9]{32}$/.test(this.channelIdOrName)) {
-                this.channelId = this.channelIdOrName;
-            } else {
-                console.log(`[Bot] 채널 이름으로 검색: ${this.channelIdOrName}`);
-                const searchResult = await this.client.search.channels(this.channelIdOrName);
-                const firstChannel = searchResult.channels[0];
-                if (!firstChannel) {
-                    throw new Error(`'${this.channelIdOrName}' 채널을 찾을 수 없습니다.`);
-                }
-                this.channelId = firstChannel.channelId;
-            }
-            console.log(`[Bot] Target Channel ID: ${this.channelId}`);
-
-            // DB에서 데이터 로드 (채널 ID 확정 후)
             await this.loadChannelData(this.channelId);
-
-            console.log(`[Bot] 채널 정보 가져오기...`);
             this.channel = await this.client.channel(this.channelId);
-            console.log(`[Bot] 라이브 상세 정보 가져오기...`);
             this.liveDetail = await this.client.live.detail(this.channelId);
-
-            if (!this.liveDetail?.chatChannelId) {
-                throw new Error(`채팅 채널 정보를 가져올 수 없습니다. (라이브 상태 확인 필요)`);
-            }
-            console.log(`[Bot] 채팅 채널 ID: ${this.liveDetail.chatChannelId}`);
-
-            this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
-
-            if(this.macroManager) this.macroManager.setChatClient(this.chat);
-            this.setupListeners();
-            console.log(`[Bot] 치지직 채팅 서버에 연결 중...`);
-            await this.chat.connect();
-            console.log(`[Bot] 봇이 성공적으로 연결되었습니다.`);
-        } catch (error: any) {
-            console.error(`[Bot] 연결 실패: ${error.message}`);
-            if(this.macroManager) this.macroManager.stopAllMacros();
-            throw error;
-        }
-    }
-
-    private setupListeners(): void {
-        if (!this.chat) return;
-
-        this.chat.on('connect', async () => {
-            if (this.hasConnected) return;
-            this.hasConnected = true;
-
-            console.log('[Bot] 채팅 서버에 성공적으로 연결되었습니다.');
-
-            const currentChat = this.chat;
-            if (currentChat) {
-                try {
-                    const selfProfile = await currentChat.selfProfile();
-                    this.botUserIdHash = selfProfile.userIdHash;
-                } catch (error) {
-                    console.error('[Bot] 봇 자신의 userIdHash를 가져오는 데 실패했습니다:', error);
-                }
-
-                if (this.onConnectCallback) {
-                    this.onConnectCallback();
-                }
-            }
-        });
-
-        this.chat.on('chat', async (chat: ChatEvent) => {
-            // 봇 비활성화 시 반응 안 함
-            if (!this.settings.chatEnabled) return;
-
-            if (this.onChatCallback) {
-                this.onChatCallback(chat);
-            }
-
-            if (chat.profile.userIdHash === this.botUserIdHash) return;
-
-            const msg = chat.message?.trim();
-            if (!msg) return;
-
-            this.pointManager?.awardPoints(chat, this.settings);
+            if (!this.liveDetail?.chatChannelId) throw new Error('Chat ID Not Found');
             
-            // DrawManager와 VoteManager는 설정된 키워드나 상태에 따라 반응하므로 항상 호출
-            this.drawManager?.handleChat(chat);
-            // VoteManager의 숫자 투표는 메시지 전체가 숫자인 경우 등을 처리하므로 호출
-            this.voteManager?.handleChat(chat);
+            this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
+            this.macroManager.setChatClient(this.chat);
+            
+            this.chat.on('chat', async (chat: ChatEvent) => {
+                if (!this.settings.chatEnabled || chat.profile.userIdHash === this.botUserIdHash) return;
+                this.pointManager.awardPoints(chat, this.settings);
+                this.drawManager.handleChat(chat);
+                await this.voteManager.handleChat(chat);
 
-            if (msg[0] === '!') {
-                const firstWord = msg.split(' ')[0];
-                switch (firstWord) {
-                    case '!시참':
-                        if (this.chat && this.participationManager) {
-                            await this.participationManager.handleCommand(chat, this.chat);
-                        }
-                        return;
-                    case '!노래':
-                    case '!노래신청':
-                    case '!대기열':
-                    case '!스킵':
-                    case '!현재노래':
-                    case '!다음곡':
-                        this.songManager?.handleCommand(chat, this.chat!, this.settings);
-                        return;
-                    case '!포인트':
-                        this.pointManager?.handleCommand(chat, this.chat!, this.settings);
-                        return;
-                    case '!투표':
-                        this.voteManager?.handleCommand(chat, this.chat!);
-                        return;
-                    case '!신청곡':
-                        this.chat?.sendChat('🎵 신청곡 명령어: !노래 [유튜브URL] (신청), !대기열 (목록), !현재노래 (현재곡), !스킵 (스킵/매니저전용)');
-                        return;
+                const msg = chat.message.trim();
+                if (msg.startsWith('!')) {
+                    const cmd = msg.split(' ')[0];
+                    if (cmd === '!시참') await this.participationManager.handleCommand(chat, this.chat!);
+                    else if (['!노래', '!노래신청', '!대기열', '!스킵', '!현재노래', '!다음곡'].includes(cmd)) this.songManager.handleCommand(chat, this.chat!, this.settings);
+                    else if (cmd === '!포인트') this.pointManager.handleCommand(chat, this.chat!, this.settings);
+                    else if (cmd === '!투표') await this.voteManager.handleCommand(chat, this.chat!);
                 }
-            }
+                if (this.commandManager.hasCommand(msg)) this.commandManager.executeCommand(chat, this.chat!);
+                else if (this.counterManager.hasCounter(msg)) this.counterManager.checkAndRespond(chat, this.chat!);
+            });
 
-            if (this.commandManager?.hasCommand(msg)) {
-                this.commandManager.executeCommand(chat, this.chat!);
-            } else if (this.counterManager?.hasCounter(msg)) {
-                this.counterManager.checkAndRespond(chat, this.chat!);
-            }
-        });
-        
-        this.chat.on('donation', async (donation: DonationEvent) => {
-            const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
-            const match = donation.message?.match(youtubeUrlRegex);
-            if (match && match[0]) {
-                try {
-                    await this.songManager?.addSongFromDonation(donation, match[0], this.settings);
-                    this.chat?.sendChat(`후원으로 노래가 신청되었습니다. 감사합니다!`);
-                } catch(e: any) { this.chat?.sendChat(e.message); }
-            }
-        });
+            this.chat.on('connect', async () => {
+                const self = await this.chat?.selfProfile();
+                this.botUserIdHash = self?.userIdHash || null;
+                this.onConnectCallback?.();
+            });
 
-        this.chat.on('disconnect', () => this.macroManager?.stopAllMacros());
+            await this.chat.connect();
+        } catch (error) { console.error(`[Bot] Connect Failed:`, error); throw error; }
     }
 
     public async disconnect(): Promise<void> {
         if (this.chat) {
-            this.macroManager?.stopAllMacros();
+            this.macroManager.stopAllMacros();
             await this.chat.disconnect();
             this.chat = null;
-            this.hasConnected = false;
         }
     }
 
-    public getChannelInfo() {
-        if (!this.channel) return null;
-        
-        return {
-            channelId: this.channelId,
-            channelName: this.channel.channelName,
-            channelImageUrl: this.channel.channelImageUrl,
-            followerCount: this.channel.followerCount,
-            openLive: this.channel.openLive,
-            channelDescription: this.channel.channelDescription
-        };
-    }
-
-    public getLiveStatus() {
-        if (!this.liveDetail) return null;
-        
-        return {
-            liveId: this.liveDetail.liveId,
-            liveTitle: this.liveDetail.liveTitle,
-            status: this.liveDetail.status,
-            concurrentUserCount: this.liveDetail.concurrentUserCount,
-            accumulateCount: this.liveDetail.accumulateCount,
-            liveImageUrl: this.liveDetail.liveImageUrl
-        };
-    }
+    public getChannelInfo() { return this.channel ? { channelId: this.channelId, channelName: this.channel.channelName, channelImageUrl: this.channel.channelImageUrl, followerCount: this.channel.followerCount } : null; }
+    public getLiveStatus() { return this.liveDetail ? { liveTitle: this.liveDetail.liveTitle, status: this.liveDetail.status, concurrentUserCount: this.liveDetail.concurrentUserCount } : null; }
+    public isConnected(): boolean { return this.chat?.connected ?? false; }
 }

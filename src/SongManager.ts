@@ -124,11 +124,18 @@ export class SongManager {
     let thumbnailUrl: string | undefined;
 
     if (ytdl.validateURL(sanitizedQuery) || ytdl.validateID(sanitizedQuery)) {
-      const info = await ytdl.getInfo(sanitizedQuery);
-      videoId = info.videoDetails.videoId;
-      videoTitle = info.videoDetails.title;
-      if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
-        thumbnailUrl = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
+      try {
+        const info = await ytdl.getInfo(sanitizedQuery);
+        videoId = info.videoDetails.videoId;
+        videoTitle = info.videoDetails.title;
+        if (info.videoDetails.thumbnails && info.videoDetails.thumbnails.length > 0) {
+          thumbnailUrl = info.videoDetails.thumbnails[info.videoDetails.thumbnails.length - 1].url;
+        }
+      } catch (ytdlError) {
+        console.warn("[SongManager] ytdl.getInfo failed, falling back to basic ID extraction:", ytdlError);
+        // URL에서 비디오 ID 강제 추출
+        videoId = ytdl.getURLVideoID(sanitizedQuery);
+        videoTitle = "유튜브 노래 (제목 로드 실패)";
       }
     } else {
       const searchResult = await youtube.search.list({
