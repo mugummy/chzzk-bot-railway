@@ -30,11 +30,19 @@ app.get('/api/auth/session', async (req, res) => {
 
 app.get('/auth/login', (req, res) => res.redirect(authManager.generateAuthUrl().url));
 
+// 치지직 콜백 처리
 app.get('/auth/callback', async (req, res) => {
     const { code, state } = req.query;
     const result = await authManager.exchangeCodeForTokens(code as string, state as string);
-    if (!result.success || !result.session) return res.redirect(`${config.clientOrigin}/?error=auth`);
-    res.redirect(`${config.clientOrigin}/dashboard?session=${result.session.sessionId}`);
+    
+    if (!result.success || !result.session) {
+        return res.redirect(`${config.clientOrigin}/?error=auth`);
+    }
+
+    // [핵심] 리액트 앱의 /dashboard 경로로 세션 토큰과 함께 리다이렉트
+    const destination = `${config.clientOrigin}/dashboard?session=${result.session.sessionId}`;
+    console.log(`[Auth] Redirecting to: ${destination}`);
+    res.redirect(destination);
 });
 
 const channelClientsMap: Map<string, Set<WebSocket>> = new Map();
