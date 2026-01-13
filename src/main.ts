@@ -6,6 +6,7 @@ import cors from 'cors';
 import { config } from './config';
 import { AuthManager } from './AuthManager';
 import { BotManager } from './BotManager';
+import { DataManager } from './DataManager';
 
 const app = express();
 const server = http.createServer(app);
@@ -61,6 +62,11 @@ wss.on('connection', async (ws, req) => {
             if (data.type === 'connect') {
                 bot = await botManager.getOrCreateBot(channelId);
                 bot.setOnStateChangeListener((type, payload) => broadcast(type, payload));
+                
+                // 랭킹 데이터 전송 (참여왕 포함)
+                const ranking = await DataManager.loadParticipationHistory(channelId);
+                ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
+
                 ws.send(JSON.stringify({ 
                     type: 'connectResult', 
                     success: true, 
@@ -81,10 +87,13 @@ wss.on('connection', async (ws, req) => {
                     ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
                     ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
                     ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
-                    ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
-                    ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
+                    ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: await DataManager.loadParticipationHistory(channelId) }));
                     break;
 
+                // CRUD 완결성: 수정(Edit) 핸들러 추가
+                case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
+                case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
+                
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
@@ -92,13 +101,15 @@ wss.on('connection', async (ws, req) => {
                 case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
                 case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
-                case 'updateMaxParticipants': bot.participation.clearAllData(); break; // 임시: 최대인원 조절 시 초기화 로직 연동 가능
                 
-                // 추첨/룰렛/투표 액션 (완전 배선)
                 case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
                 case 'executeDraw': 
                     const winners = bot.draw.draw(data.payload.count);
-                    if (winners.success) broadcast('drawWinnerResult', { winners: winners.winners });
+                    if (winners.success) {
+                        broadcast('drawWinnerResult', { winners: winners.winners });
+                        // 참여왕 기록
+                        winners.winners.forEach(w => DataManager.saveParticipationHistory(channelId, w.userIdHash, w.nickname));
+                    }
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
                 
