@@ -20,6 +20,7 @@ export interface BotData {
     rouletteHistory?: any[];
     overlaySettings?: any;
     participationRanking?: any[];
+    greetData?: { settings: any; history: any };
 }
 
 export class DataManager {
@@ -37,7 +38,12 @@ export class DataManager {
         ]);
 
         if (!chan.data) {
-            await supabase.from('channels').insert({ channel_id: channelId, settings: defaultSettings });
+            await supabase.from('channels').insert({ 
+                channel_id: channelId, 
+                settings: defaultSettings,
+                greet_settings: { enabled: true, type: 1, message: "방송에 오신 것을 환영합니다!" },
+                greet_history: {}
+            });
         }
 
         const db = chan.data || {};
@@ -46,25 +52,31 @@ export class DataManager {
             overlaySettings: db.overlay_settings || {},
             songQueue: db.song_queue || [],
             participants: db.participation_data || {},
+            greetData: { settings: db.greet_settings, history: db.greet_history },
             points: (pts.data || []).reduce((acc: any, p: any) => {
                 acc[p.user_id_hash] = { nickname: p.nickname, points: p.amount, lastMessageTime: p.last_chat_at ? new Date(p.last_chat_at).getTime() : 0 };
                 return acc;
             }, {}),
             commands: (cmds.data || []).map(c => ({ trigger: c.triggers[0], triggers: c.triggers, response: c.response, enabled: c.enabled })),
             macros: (macs.data || []).map(m => ({ id: m.id, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
-            counters: (cnts.data || []).map(c => ({ trigger: c.trigger, response: c.response, enabled: c.enabled, state: { totalCount: c.count } })),
+            counters: (cnts.data || []).map(c => ({ trigger: c.trigger, response: c.response, enabled: c.enabled, oncePerDay: c.once_per_day, state: { totalCount: c.count, lastUsedDate: {} } })),
             votes: db.current_vote ? [db.current_vote] : [],
-            currentSong: null
+            currentSong: null,
+            participationRanking: await DataManager.loadParticipationHistory(channelId)
         };
     }
 
-    static async saveData(channelId: string, data: BotData): Promise<void> {
-        // 기존 예약된 저장이 있다면 취소
-        if (this.saveTimeouts.has(channelId)) {
-            clearTimeout(this.saveTimeouts.get(channelId)!);
-        }
+    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
+        await supabase.from('participation_history').insert({ channel_id: channelId, user_id_hash: userIdHash, nickname: nickname });
+    }
 
-        // 500ms 후에 실제 저장 수행 (디바운싱)
+    static async loadParticipationHistory(channelId: string) {
+        const { data } = await supabase.rpc('get_participation_ranking', { chan_id: channelId });
+        return data || [];
+    }
+
+    static async saveData(channelId: string, data: BotData): Promise<void> {
+        if (this.saveTimeouts.has(channelId)) clearTimeout(this.saveTimeouts.get(channelId)!);
         this.saveTimeouts.set(channelId, setTimeout(async () => {
             this.saveTimeouts.delete(channelId);
             await this.executeSave(channelId, data);
@@ -72,24 +84,18 @@ export class DataManager {
     }
 
     private static async executeSave(channelId: string, data: BotData): Promise<void> {
-        console.log(`[DataManager] Atomic Persistence Executing for: ${channelId}`);
         try {
-            // 1. 채널 메타데이터 업데이트 (update 사용 - 세션 컬럼 보존)
-            const { error: channelError } = await supabase
-                .from('channels')
-                .update({
-                    settings: data.settings,
-                    overlay_settings: data.overlaySettings || {},
-                    song_queue: data.songQueue || [],
-                    current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
-                    participation_data: data.participants,
-                    updated_at: new Date().toISOString()
-                })
-                .eq('channel_id', channelId);
+            await supabase.from('channels').update({
+                settings: data.settings,
+                overlay_settings: data.overlaySettings || {},
+                song_queue: data.songQueue || [],
+                current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
+                participation_data: data.participants,
+                greet_settings: data.greetData?.settings,
+                greet_history: data.greetData?.history,
+                updated_at: new Date().toISOString()
+            }).eq('channel_id', channelId);
 
-            if (channelError) throw channelError;
-
-            // 2. 명령어/매크로/카운터 저장
             await Promise.all([
                 (async () => {
                     await supabase.from('commands').delete().eq('channel_id', channelId);
@@ -111,18 +117,11 @@ export class DataManager {
                     await supabase.from('counters').delete().eq('channel_id', channelId);
                     if (data.counters?.length) {
                         await supabase.from('counters').insert(data.counters.map(c => ({
-                            channel_id: channelId, trigger: c.trigger, response: c.response, count: c.state?.totalCount || 0, enabled: c.enabled
+                            channel_id: channelId, trigger: c.trigger, response: c.response, count: c.state?.totalCount || 0, enabled: c.enabled, once_per_day: c.oncePerDay
                         })));
                     }
                 })()
             ]);
-            console.log(`[DataManager] Success: All data synced to DB for ${channelId}`);
-        } catch (error) {
-            console.error(`[DataManager] Critical Error in executeSave:`, error);
-        }
-    }
-
-    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
-        await supabase.from('participation_history').insert({ channel_id: channelId, user_id_hash: userIdHash, nickname: nickname });
+        } catch (error) { console.error(`[DataManager] Error:`, error); }
     }
 }

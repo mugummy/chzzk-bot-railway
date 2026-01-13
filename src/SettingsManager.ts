@@ -1,26 +1,30 @@
 
 export interface BotSettings {
-    chatEnabled: boolean; // 봇 채팅 활성화 여부
-    songRequestMode: 'cooldown' | 'donation' | 'off';
-    songRequestMinDonation: number;
+    chatEnabled: boolean;
+    songRequestCommand: string; // 추가: !신청곡 등
+    songRequestResponse: string; // 추가: 응답 문구
+    songRequestMode: 'all' | 'cooldown' | 'donation' | 'off';
     songRequestCooldown: number;
-    pointSystemEnabled: boolean;
+    minDonationAmount: number;
+    maxSongLength: number;
+    maxQueueSize: number;
     pointsPerChat: number;
-    pointCooldown: number;
-    playbackMode: 'off' | 'repeat_one' | 'repeat_all' | 'shuffle';
-    pointsUnit: string;
+    pointsCooldown: number;
+    pointsName: string;
 }
 
 export const defaultSettings: BotSettings = {
     chatEnabled: true,
-    songRequestMode: 'cooldown',
-    songRequestMinDonation: 1000,
-    songRequestCooldown: 300,
-    pointSystemEnabled: true,
-    pointsPerChat: 10,
-    pointCooldown: 60,
-    playbackMode: 'off',
-    pointsUnit: '포인트',
+    songRequestCommand: '!신청곡',
+    songRequestResponse: '{user}님, {song} 를 신청곡 리스트에 추가했어요!',
+    songRequestMode: 'all',
+    songRequestCooldown: 30,
+    minDonationAmount: 1000,
+    maxSongLength: 10,
+    maxQueueSize: 50,
+    pointsPerChat: 1,
+    pointsCooldown: 60,
+    pointsName: '포인트'
 };
 
 export class SettingsManager {

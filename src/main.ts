@@ -118,7 +118,7 @@ wss.on('connection', async (ws, req) => {
                 case 'startVote': bot.voteManager.startVote(); break;
                 case 'endVote': bot.voteManager.endVote(); break;
                 case 'resetVote': bot.voteManager.resetVote(); break;
-                case 'createRoulette': bot.rouletteManager.createSession(data.payload.items); break;
+                case 'createRoulette': bot.rouletteManager.createRoulette(data.payload.items); break;
                 case 'spinRoulette':
                     const spin = bot.rouletteManager.spin();
                     if (spin.success) broadcast({ type: 'rouletteSpinResult', payload: spin });

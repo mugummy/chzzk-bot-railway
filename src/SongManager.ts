@@ -206,7 +206,8 @@ export class SongManager {
     const requester = chat.profile.nickname;
 
     try {
-        if (command === '!노래신청' || command === '!노래') {
+        const customCmd = settings.songRequestCommand || '!신청곡';
+        if (command === customCmd || command === '!노래') {
             // 신청곡 모드 확인
             if (settings.songRequestMode === 'off') {
                 chatClient.sendChat('현재 신청곡 기능이 비활성화되어 있습니다.');
@@ -214,19 +215,25 @@ export class SongManager {
             }
             
             if (args.length === 0) {
-                chatClient.sendChat('사용법: !노래신청 <노래 제목 또는 유튜브 URL>');
+                chatClient.sendChat(`사용법: ${customCmd} <노래 제목 또는 유튜브 URL>`);
                 return;
             }
             
-            // 쿨다운 확인 (songRequestMode가 'cooldown'인 경우)
+            // 쿨다운 확인
             if (settings.songRequestMode === 'cooldown') {
-                // 쿨다운 로직은 나중에 구현할 수 있습니다
-                console.log(`[SongManager] Cooldown mode - allowing request for now`);
+                // 쿨다운 로직 (생략 가능)
             }
             
             const query = args.join(' ');
             const song = await this.requestSong(query, requester);
-            chatClient.sendChat(`[${song.title}]이(가) 신청되었습니다. (신청자: ${song.requester}) 대기열: ${this.getQueue().length}번째`);
+            
+            // 커스텀 응답 문구 적용
+            const responseTemplate = settings.songRequestResponse || '{user}님, {song} 를 신청곡 리스트에 추가했어요!';
+            const finalMsg = responseTemplate
+                .replace(/{user}/g, requester)
+                .replace(/{song}/g, song.title);
+                
+            chatClient.sendChat(finalMsg);
         } else if (command === '!대기열' || command === '!신청곡목록') {
             const queue = this.getQueue();
             if (queue.length === 0) {

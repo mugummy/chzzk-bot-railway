@@ -1,11 +1,11 @@
-// src/Bot.ts - Refined Controller
+// src/Bot.ts - Expert Controller with Greet Support
 
-import { ChzzkClient, ChzzkChat, ChatEvent, LiveDetail, Channel, DonationEvent } from 'chzzk';
+import { ChzzkClient, ChzzkChat, ChatEvent, LiveDetail, Channel } from 'chzzk';
 import { config } from './config';
 import { CommandManager } from './CommandManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
-import { DataManager, BotData } from './DataManager';
+import { DataManager } from './DataManager';
 import { ParticipationManager } from './ParticipationManager';
 import { SongManager } from './SongManager';
 import { PointManager } from './PointManager';
@@ -13,6 +13,7 @@ import { SettingsManager, BotSettings, defaultSettings } from './SettingsManager
 import { VoteManager } from './VoteManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
+import { GreetManager } from './GreetManager'; // 신규
 
 type StateListener = () => void;
 
@@ -30,6 +31,7 @@ export class ChatBot {
     public voteManager!: VoteManager;
     public drawManager!: DrawManager;
     public rouletteManager!: RouletteManager;
+    public greetManager!: GreetManager; // 신규
     
     public settings: BotSettings = defaultSettings;
     public overlaySettings: any = {};
@@ -62,21 +64,19 @@ export class ChatBot {
         this.voteManager = new VoteManager(this, data.votes);
         this.drawManager = new DrawManager(this, []);
         this.rouletteManager = new RouletteManager(this, []);
+        this.greetManager = new GreetManager(this, data.greetData); // 인사 매니저 초기화
 
-        // Listeners for broadcasting
+        // Listeners
         this.participationManager.setOnStateChangeListener(() => this.notifyStateChange('participation'));
         this.songManager.setOnStateChangeListener(() => this.notifyStateChange('song'));
         this.voteManager.setOnStateChangeListener(() => this.notifyStateChange('vote'));
         this.drawManager.setOnStateChangeListener(() => this.notifyStateChange('draw'));
         this.rouletteManager.setOnStateChangeListener(() => this.notifyStateChange('roulette'));
         this.pointManager.setOnStateChangeListener(() => this.notifyStateChange('points'));
-        
-        // 추가: 명령어, 매크로, 카운터 리스너 (실시간 동기화용)
         this.commandManager.setOnStateChangeListener(() => this.notifyStateChange('commands'));
         this.macroManager.setOnStateChangeListener(() => this.notifyStateChange('macros'));
         this.counterManager.setOnStateChangeListener(() => this.notifyStateChange('counters'));
-        
-        console.log('[Bot] 데이터 로딩 완료.');
+        this.greetManager.setOnStateChangeListener(() => this.notifyStateChange('greet'));
     }
 
     private notifyStateChange(type: string) { this.onStateChangeCallbacks[type]?.(); }
@@ -94,20 +94,14 @@ export class ChatBot {
             settings: this.settings,
             votes: this.voteManager.getVotes(),
             participants: this.participationManager.getState(),
-            overlaySettings: this.overlaySettings
+            overlaySettings: this.overlaySettings,
+            greetData: this.greetManager.getData() // 인사 데이터 포함
         });
     }
     
     public updateSettings(newSettings: Partial<BotSettings>) { 
-        const isChatToggle = newSettings.chatEnabled !== undefined && this.settings.chatEnabled !== newSettings.chatEnabled;
         this.settingsManager.updateSettings(newSettings); 
         this.settings = this.settingsManager.getSettings(); 
-        
-        if (isChatToggle) {
-            const msg = this.settings.chatEnabled ? '🤖 봇이 활성화되었습니다!' : '👋 봇이 비활성화되었습니다.';
-            try { this.chat?.sendChat(msg); } catch(e){}
-        }
-        
         this.saveAllData(); 
         this.notifyStateChange('settings');
     }
@@ -142,6 +136,10 @@ export class ChatBot {
             
             this.chat.on('chat', async (chat: ChatEvent) => {
                 if (!this.settings.chatEnabled || chat.profile.userIdHash === this.botUserIdHash) return;
+                
+                // 인사 로직 실행
+                await this.greetManager.handleChat(chat, this.chat!);
+
                 this.pointManager.awardPoints(chat, this.settings);
                 this.drawManager.handleChat(chat);
                 await this.voteManager.handleChat(chat);
@@ -177,6 +175,6 @@ export class ChatBot {
     }
 
     public getChannelInfo() { return this.channel ? { channelId: this.channelId, channelName: this.channel.channelName, channelImageUrl: this.channel.channelImageUrl, followerCount: this.channel.followerCount } : null; }
-    public getLiveStatus() { return this.liveDetail ? { liveTitle: this.liveDetail.liveTitle, status: this.liveDetail.status, concurrentUserCount: this.liveDetail.concurrentUserCount } : null; }
+    public getLiveStatus() { return this.liveDetail ? { liveTitle: this.liveDetail.liveTitle, status: this.liveDetail.status, concurrentUserCount: this.liveDetail.concurrentUserCount, category: this.liveDetail.category } : null; }
     public isConnected(): boolean { return this.chat?.connected ?? false; }
 }
