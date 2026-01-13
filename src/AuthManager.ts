@@ -61,14 +61,30 @@ export class AuthManager {
      * DB에 세션 저장
      */
     private async saveSessionToDB(session: AuthSession): Promise<void> {
-        await supabase
+        console.log(`[AuthManager] Saving session to DB for channel: ${session.user.channelId}`);
+        const { error } = await supabase
             .from('channels')
             .upsert({
                 channel_id: session.user.channelId,
                 session_id: session.sessionId,
                 session_data: session,
+                settings: {
+                    chatEnabled: true,
+                    songRequestMode: 'all',
+                    songRequestCooldown: 30,
+                    minDonationAmount: 0,
+                    pointsPerChat: 1,
+                    pointsCooldown: 60,
+                    pointsName: '포인트'
+                },
                 updated_at: new Date().toISOString()
             });
+        
+        if (error) {
+            console.error('[AuthManager] DB Upsert Error:', error);
+        } else {
+            console.log('[AuthManager] DB Upsert Success');
+        }
     }
 
     public generateAuthUrl(redirectPath?: string): { url: string; state: string } {

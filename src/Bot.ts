@@ -74,6 +74,7 @@ export class ChatBot {
 
     private notifyStateChange(type: string) { this.onStateChangeCallbacks[type]?.(); }
     public setOnStateChangeListener(type: string, listener: StateListener) { this.onStateChangeCallbacks[type] = listener; }
+    public setOnChatListener(listener: (chat: ChatEvent) => void) { this.onChatCallback = listener; }
     
     public saveAllData(): void { 
         if (!this.channelId) return;
