@@ -7,6 +7,9 @@ import { config } from './config';
 import { AuthManager } from './AuthManager';
 import { BotManager } from './BotManager';
 
+/**
+ * Main Server Hub: 모든 실시간 데이터 흐름을 통제합니다.
+ */
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server });
@@ -19,7 +22,7 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-// 인증 세션 확인 API
+// 인증 체크 엔드포인트
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
     if (!token) return res.json({ authenticated: false });
@@ -27,10 +30,8 @@ app.get('/api/auth/session', async (req, res) => {
     res.json({ authenticated: !!session, user: session?.user || null });
 });
 
-// 로그인 리다이렉트
 app.get('/auth/login', (req, res) => res.redirect(authManager.generateAuthUrl().url));
 
-// 치지직 콜백 처리
 app.get('/auth/callback', async (req, res) => {
     const { code, state } = req.query;
     const result = await authManager.exchangeCodeForTokens(code as string, state as string);
@@ -54,7 +55,7 @@ wss.on('connection', async (ws, req) => {
 
     const broadcast = (type: string, payload: any) => {
         const msg = JSON.stringify({ type, payload });
-        clients.forEach(c => c.readyState === WebSocket.OPEN && c.send(msg));
+        clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
 
     ws.on('message', async (message) => {
@@ -75,6 +76,7 @@ wss.on('connection', async (ws, req) => {
 
             if (!bot) return;
 
+            // [핵심] 대시보드 액션과 서버 매니저 메서드 1:1 매칭
             switch (data.type) {
                 case 'requestData':
                     ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
@@ -87,7 +89,6 @@ wss.on('connection', async (ws, req) => {
                     ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
                     break;
 
-                // 액션 핸들러 통합
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
@@ -105,12 +106,14 @@ wss.on('connection', async (ws, req) => {
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
+                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break; // 보정: createRoulette 메서드명 일치
+                case 'spinRoulette': bot.roulette.spin(); break;
                 case 'controlMusic':
                     if (data.action === 'skip') bot.songs.skipSong();
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
-        } catch (err) { console.error('[WS] Error:', err); }
+        } catch (err) { console.error('[WS] System Processing Error:', err); }
     });
 
     ws.on('close', () => clients.delete(ws));

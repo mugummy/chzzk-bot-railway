@@ -5,14 +5,15 @@ import { VoteManager } from './VoteManager';
 import { DataManager } from './DataManager';
 import { PointManager } from './PointManager';
 import { GreetManager } from './GreetManager';
-import { SettingsManager, BotSettings } from './SettingsManager';
+import { SettingsManager } from './SettingsManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
 import { ParticipationManager } from './ParticipationManager';
+import { DrawManager } from './DrawManager';
+import { RouletteManager } from './RouletteManager';
 
 /**
  * BotInstance: 개별 채널의 봇 로직을 독립적으로 수행하는 클래스
- * 모든 매니저를 소유하며, 채팅 이벤트를 분배합니다.
  */
 export class BotInstance {
     private client: ChzzkClient;
@@ -29,6 +30,8 @@ export class BotInstance {
     public counters!: CounterManager;
     public macros!: MacroManager;
     public participation!: ParticipationManager;
+    public draw!: DrawManager;
+    public roulette!: RouletteManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
@@ -36,26 +39,19 @@ export class BotInstance {
         this.client = new ChzzkClient({ nidAuth, nidSession: nidSes });
     }
 
-    /**
-     * 상태 변경 시 대시보드로 브로드캐스트하기 위한 리스너 설정
-     */
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
     private notify(type: string, payload: any) {
         this.onStateChangeCallback(type, payload);
-        this.saveAll(); // 상태 변경 시 자동 저장 (DataManager 디바운스 활용)
+        this.saveAll(); 
     }
 
-    /**
-     * 초기 데이터 로드 및 매니저 설정
-     */
     public async setup() {
-        console.log(`[BotInstance] Setting up channel: ${this.channelId}`);
         const data = await DataManager.loadData(this.channelId);
 
-        // 매니저 초기화 및 상태 변경 감지 연결
+        // 매니저 초기화 및 상태 변경 감지 연결 (완벽한 동기화)
         this.settings = new SettingsManager(data.settings);
         this.settings.setOnStateChangeListener(() => this.notify('settingsUpdate', this.settings.getSettings()));
 
@@ -81,87 +77,61 @@ export class BotInstance {
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
         this.votes.setOnStateChangeListener(() => this.notify('voteStateUpdate', this.votes.getState()));
 
+        this.draw = new DrawManager(this as any, []);
+        this.draw.setOnStateChangeListener(() => this.notify('drawStateUpdate', this.draw.getState()));
+
+        this.roulette = new RouletteManager(this as any, []);
+        this.roulette.setOnStateChangeListener(() => this.notify('rouletteStateUpdate', this.roulette.getState()));
+
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
-        // 치지직 채팅 연결
+        // 치지직 접속 로직
         const live = await this.client.live.detail(this.channelId);
         if (!live?.chatChannelId) throw new Error('Chat Channel ID Not Found');
 
-        this.chat = this.client.chat({
-            channelId: this.channelId,
-            chatChannelId: live.chatChannelId
-        });
-
+        this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: live.chatChannelId });
         this.chat.on('chat', (chat) => this.handleChat(chat));
         this.chat.on('donation', (donation) => this.handleDonation(donation));
         
         this.chat.on('connect', async () => {
             const self = await this.chat?.selfProfile();
             this.botUserIdHash = self?.userIdHash || null;
-            console.log(`[BotInstance] ${this.channelId} Connected as ${self?.nickname}`);
+            this.macros.setChatClient(this.chat!); // 매크로에 채팅 클라이언트 주입
         });
 
         await this.chat.connect();
     }
 
-    /**
-     * 모든 채팅 이벤트 처리 및 분배
-     */
     private async handleChat(chat: ChatEvent) {
         if (!this.settings.getSettings().chatEnabled) return;
-        if (chat.profile.userIdHash === this.botUserIdHash) return; // 봇 본인 채팅 무시
+        if (chat.profile.userIdHash === this.botUserIdHash) return;
 
-        // 1. 인사 서비스
         await this.greet.handleChat(chat, this.chat!);
-
-        // 2. 포인트 서비스
         this.points.awardPoints(chat, this.settings.getSettings());
-
-        // 3. 투표 서비스
         await this.votes.handleChat(chat);
+        this.draw.handleChat(chat);
 
-        // 4. 추첨 서비스 등
-        
         const msg = chat.message.trim();
-        
-        // 5. 기본 명령어 및 커스텀 명령어 처리
         if (msg.startsWith('!')) {
             const cmd = msg.split(' ')[0];
-            if (['!노래', '!신청', '!스킵'].includes(cmd)) {
-                await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
-            } else if (cmd === '!시참') {
-                await this.participation.handleCommand(chat, this.chat!);
-            }
+            if (['!노래', '!신청', '!스킵'].includes(cmd)) await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
+            else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
         }
 
-        // 커스텀 명령어 실행
-        if (this.commands.hasCommand(msg)) {
-            await this.commands.executeCommand(chat, this.chat!);
-        } else if (this.counters.hasCounter(msg)) {
-            await this.counters.checkAndRespond(chat, this.chat!);
-        }
+        if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
+        else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
     }
 
-    /**
-     * 도네이션 이벤트 처리
-     */
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
-        
-        // 도네이션으로 노래 신청 처리 로직
         const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
         const match = donation.message?.match(youtubeUrlRegex);
         if (match && match[0]) {
-            try {
-                await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings());
-            } catch(e) {}
+            try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {}
         }
     }
 
-    /**
-     * 데이터 영구 저장
-     */
     public async saveAll() {
         await DataManager.saveData(this.channelId, {
             settings: this.settings.getSettings(),
@@ -185,4 +155,5 @@ export class BotInstance {
     }
 
     public getChannelId() { return this.channelId; }
+    public getStatus() { return { connected: this.chat?.connected || false, channelId: this.channelId }; }
 }
