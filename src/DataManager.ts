@@ -23,6 +23,8 @@ export interface BotData {
 }
 
 export class DataManager {
+    private static saveTimeouts: Map<string, NodeJS.Timeout> = new Map();
+
     static async loadData(channelId: string): Promise<BotData> {
         console.log(`[DataManager] Loading all assets for: ${channelId}`);
 
@@ -57,19 +59,37 @@ export class DataManager {
     }
 
     static async saveData(channelId: string, data: BotData): Promise<void> {
-        console.log(`[DataManager] Atomic Persistence for ${channelId}`);
-        try {
-            // 1. 채널 메타데이터 (Settings, Overlay, Queue, Participation)
-            await supabase.from('channels').update({
-                settings: data.settings,
-                overlay_settings: data.overlaySettings,
-                song_queue: data.songQueue,
-                current_vote: data.votes?.length ? data.votes[data.votes.length - 1] : null,
-                participation_data: data.participants,
-                updated_at: new Date().toISOString()
-            }).eq('channel_id', channelId);
+        // 기존 예약된 저장이 있다면 취소
+        if (this.saveTimeouts.has(channelId)) {
+            clearTimeout(this.saveTimeouts.get(channelId)!);
+        }
 
-            // 2. 명령어/매크로/카운터 일괄 갱신
+        // 500ms 후에 실제 저장 수행 (디바운싱)
+        this.saveTimeouts.set(channelId, setTimeout(async () => {
+            this.saveTimeouts.delete(channelId);
+            await this.executeSave(channelId, data);
+        }, 500));
+    }
+
+    private static async executeSave(channelId: string, data: BotData): Promise<void> {
+        console.log(`[DataManager] Atomic Persistence Executing for: ${channelId}`);
+        try {
+            // 1. 채널 메타데이터 업데이트 (update 사용 - 세션 컬럼 보존)
+            const { error: channelError } = await supabase
+                .from('channels')
+                .update({
+                    settings: data.settings,
+                    overlay_settings: data.overlaySettings || {},
+                    song_queue: data.songQueue || [],
+                    current_vote: data.votes && data.votes.length > 0 ? data.votes[data.votes.length - 1] : null,
+                    participation_data: data.participants,
+                    updated_at: new Date().toISOString()
+                })
+                .eq('channel_id', channelId);
+
+            if (channelError) throw channelError;
+
+            // 2. 명령어/매크로/카운터 저장
             await Promise.all([
                 (async () => {
                     await supabase.from('commands').delete().eq('channel_id', channelId);
@@ -96,7 +116,10 @@ export class DataManager {
                     }
                 })()
             ]);
-        } catch (e) { console.error(`[DataManager] Persistence Failed:`, e); }
+            console.log(`[DataManager] Success: All data synced to DB for ${channelId}`);
+        } catch (error) {
+            console.error(`[DataManager] Critical Error in executeSave:`, error);
+        }
     }
 
     static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
