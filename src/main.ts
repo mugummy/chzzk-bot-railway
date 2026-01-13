@@ -170,6 +170,8 @@ wss.on('connection', async (ws, req) => {
                 case 'resetVote': bot.votes.resetVote(); break;
                 case 'controlMusic':
                     if (data.action === 'skip') bot.songs.skipSong();
+                    if (data.action === 'playNext') bot.songs.playNext(); // 강제 재생
+                    if (data.action === 'remove') bot.songs.removeSong(data.index);
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     break;
             }
