@@ -1,26 +1,20 @@
-// src/config.ts
-
 import dotenv from 'dotenv';
-import path from 'path';
+dotenv.config();
 
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
-
+/**
+ * Global Configuration: 서버와 클라이언트의 통신 주소를 정의합니다.
+ */
 export const config = {
-  // 네이버 쿠키 (봇 계정용 - 채팅 전송에 필요)
-  nidAuth: process.env.NID_AUT || "",
-  nidSes: process.env.NID_SES || "",
-  
-  // YouTube API
-  youtubeApiKey: process.env.YOUTUBE_API_KEY || "",
-  
-  // 서버 포트
-  port: process.env.PORT || 3000,
-  
-  // 치지직 OAuth 설정 (대시보드 로그인용)
-  chzzk: {
-    clientId: process.env.CHZZK_CLIENT_ID || "",
-    clientSecret: process.env.CHZZK_CLIENT_SECRET || "",
-    // 개발 환경에서는 http://localhost:3000/auth/callback
-    redirectUri: process.env.CHZZK_REDIRECT_URI || "http://localhost:3000/auth/callback"
-  }
+    port: process.env.PORT || 8080,
+    // 프론트엔드(Vercel) 주소를 명확히 지정
+    clientOrigin: process.env.CLIENT_ORIGIN || 'https://mugumchzzkbot.vercel.app',
+    
+    chzzk: {
+        clientId: process.env.CHZZK_CLIENT_ID || '',
+        clientSecret: process.env.CHZZK_CLIENT_SECRET || '',
+        // Railway 서버의 실제 주소 (인증 콜백용)
+        redirectUri: process.env.REDIRECT_URI || 'https://web-production-19eef.up.railway.app/auth/callback',
+        nidAuth: process.env.NID_AUTH || '',
+        nidSes: process.env.NID_SES || ''
+    }
 };
