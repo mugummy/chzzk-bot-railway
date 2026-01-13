@@ -99,7 +99,10 @@ wss.on('connection', async (ws, req) => {
                     ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songManager.getState() }));
                     ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.voteManager.getState() }));
                     ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participationManager.getState() }));
+                    ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greetManager.getState() }));
                     break;
+                case 'updateGreetSettings': bot.greetManager.updateSettings(data.data); break;
+                case 'resetGreetHistory': bot.greetManager.clearHistory(); break;
                 case 'updateSettings': bot.updateSettings(data.data); break;
                 case 'updateOverlaySettings': bot.updateOverlaySettings(data.payload); break;
                 case 'addCommand': bot.commandManager.addCommand(data.data.trigger, data.data.response); break;
