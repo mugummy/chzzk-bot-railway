@@ -2,14 +2,11 @@ import { supabase } from "./supabase";
 import { defaultSettings } from "./SettingsManager";
 
 /**
- * DataManager: 데이터베이스 통신 총괄
+ * DataManager: 데이터의 영속성을 보장하는 핵심 클래스 (즉시 저장 방식 적용)
  */
 export class DataManager {
-    private static saveQueue: Map<string, any> = new Map();
-    private static saveTimeouts: Map<string, NodeJS.Timeout> = new Map();
-
     static async loadData(channelId: string): Promise<any> {
-        console.log(`[DataManager] Loading: ${channelId}`);
+        console.log(`[DataManager] Loading Assets: ${channelId}`);
         const [chan, cmds, macs, cnts, pts] = await Promise.all([
             supabase.from('channels').select('*').eq('channel_id', channelId).single(),
             supabase.from('commands').select('*').eq('channel_id', channelId),
@@ -19,7 +16,12 @@ export class DataManager {
         ]);
 
         if (!chan.data) {
-            await supabase.from('channels').insert({ channel_id: channelId, settings: defaultSettings, greet_settings: { enabled: true, type: 1, message: "반갑습니다!" }, greet_history: {} });
+            await supabase.from('channels').insert({ 
+                channel_id: channelId, 
+                settings: defaultSettings,
+                greet_settings: { enabled: true, type: 1, message: "반갑습니다!" },
+                greet_history: {}
+            });
             return this.getDefault(channelId);
         }
 
@@ -40,42 +42,11 @@ export class DataManager {
         };
     }
 
-    // [중요] 누락되었던 참여 랭킹 로드 함수 추가
-    static async loadParticipationHistory(channelId: string) {
-        try {
-            const { data } = await supabase
-                .from('participation_history')
-                .select('nickname, count')
-                .eq('channel_id', channelId)
-                .order('count', { ascending: false })
-                .limit(10);
-            return data || [];
-        } catch (e) { return []; }
-    }
-
-    static async saveParticipationHistory(channelId: string, userIdHash: string, nickname: string) {
-        const { data: existing } = await supabase.from('participation_history').select('count').eq('channel_id', channelId).eq('user_id_hash', userIdHash).single();
-        if (existing) {
-            await supabase.from('participation_history').update({ count: existing.count + 1, nickname }).eq('channel_id', channelId).eq('user_id_hash', userIdHash);
-        } else {
-            await supabase.from('participation_history').insert({ channel_id: channelId, user_id_hash: userIdHash, nickname, count: 1 });
-        }
-    }
-
+    // [수정] 즉시 저장 및 에러 로깅 강화
     static async saveData(channelId: string, data: any): Promise<void> {
-        this.saveQueue.set(channelId, data);
-        if (this.saveTimeouts.has(channelId)) return;
-        const timeout = setTimeout(async () => {
-            this.saveTimeouts.delete(channelId);
-            const latest = this.saveQueue.get(channelId);
-            if (latest) { await this.executeActualSave(channelId, latest); }
-        }, 1000);
-        this.saveTimeouts.set(channelId, timeout);
-    }
-
-    private static async executeActualSave(channelId: string, data: any) {
         try {
-            await supabase.from('channels').update({
+            // 1. 채널 메타데이터 업데이트
+            const { error } = await supabase.from('channels').update({
                 settings: data.settings,
                 greet_settings: data.greetData.settings,
                 greet_history: data.greetData.history,
@@ -84,8 +55,47 @@ export class DataManager {
                 participation_data: data.participants,
                 updated_at: new Date().toISOString()
             }).eq('channel_id', channelId);
-            console.log(`[DataManager] Persistent: ${channelId}`);
-        } catch (e) {}
+
+            if (error) throw error;
+
+            // 2. 종속 데이터 동기화
+            await this.syncCommands(channelId, data.commands);
+            await this.syncMacros(channelId, data.macros);
+            await this.syncCounters(channelId, data.counters);
+            await this.syncPoints(channelId, data.points);
+
+            console.log(`[DataManager] Save Success: ${channelId}`);
+        } catch (e) {
+            console.error(`[DataManager] Save Failed:`, e);
+        }
+    }
+
+    private static async syncCommands(channelId: string, items: any[]) {
+        await supabase.from('commands').delete().eq('channel_id', channelId);
+        if (items.length) await supabase.from('commands').insert(items.map(i => ({ channel_id: channelId, triggers: i.triggers, response: i.response, enabled: i.enabled })));
+    }
+
+    private static async syncMacros(channelId: string, items: any[]) {
+        await supabase.from('macros').delete().eq('channel_id', channelId);
+        if (items.length) await supabase.from('macros').insert(items.map(i => ({ channel_id: channelId, message: i.message, interval_minutes: i.interval, enabled: i.enabled })));
+    }
+
+    private static async syncCounters(channelId: string, items: any[]) {
+        await supabase.from('counters').delete().eq('channel_id', channelId);
+        if (items.length) await supabase.from('counters').insert(items.map(i => ({ channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay })));
+    }
+
+    private static async syncPoints(channelId: string, pointsMap: any) {
+        const entries = Object.entries(pointsMap);
+        if (entries.length === 0) return;
+        const payload = entries.map(([id, p]: [string, any]) => ({
+            channel_id: channelId,
+            user_id_hash: id,
+            amount: p.points,
+            nickname: p.nickname,
+            last_chat_at: new Date(p.lastMessageTime).toISOString()
+        }));
+        await supabase.from('points').upsert(payload, { onConflict: 'channel_id,user_id_hash' });
     }
 
     private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], votes: [], participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
