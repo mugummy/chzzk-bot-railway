@@ -30,6 +30,7 @@ export class DataManager {
             settings: { ...defaultSettings, ...db.settings },
             greetData: { settings: db.greet_settings, history: db.greet_history || {} },
             songQueue: db.song_queue || [],
+            currentSong: db.current_song || null, // [추가] 현재 곡 정보 로드
             votes: db.current_vote ? [db.current_vote] : [],
             participants: db.participation_data || { queue: [], active: [], isActive: false, max: 10 },
             commands: (cmds.data || []).map(c => ({ id: c.id, triggers: c.triggers, response: c.response, enabled: c.enabled })),
@@ -42,7 +43,6 @@ export class DataManager {
         };
     }
 
-    // [수정] 단순 조회로 변경하여 GROUP BY 에러 해결
     static async loadParticipationHistory(channelId: string) {
         try {
             const { data } = await supabase
@@ -79,11 +79,13 @@ export class DataManager {
 
     private static async executeActualSave(channelId: string, data: any) {
         try {
+            // [수정] current_song 필드 추가하여 재생 상태 영구 보존
             await supabase.from('channels').update({
                 settings: data.settings,
                 greet_settings: data.greetData.settings,
                 greet_history: data.greetData.history,
                 song_queue: data.songQueue,
+                current_song: data.currentSong || null, // 현재 곡 저장
                 current_vote: data.votes?.[0] || null,
                 participation_data: data.participants,
                 updated_at: new Date().toISOString()
@@ -95,7 +97,7 @@ export class DataManager {
                 this.sync(channelId, 'counters', data.counters),
                 this.syncPoints(channelId, data.points)
             ]);
-            console.log(`[DataManager] Assets Synced: ${channelId}`);
+            console.log(`[DataManager] Persistent Sync: ${channelId}`);
         } catch (e) { console.error(`[DataManager] Save Error:`, e); }
     }
 
@@ -120,5 +122,5 @@ export class DataManager {
         await supabase.from('points').upsert(payload, { onConflict: 'channel_id,user_id_hash' });
     }
 
-    private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], votes: [], participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
+    private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], currentSong: null, votes: [], participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
 }

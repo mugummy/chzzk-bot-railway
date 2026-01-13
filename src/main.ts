@@ -22,9 +22,6 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-// [서버 시작 시 봇 예열]
-botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded'));
-
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
     if (!token) return res.json({ authenticated: false });
@@ -61,7 +58,7 @@ wss.on('connection', async (ws, req) => {
 
     const sendFullState = async (bot: any) => {
         if (!bot) return;
-        await bot.refreshLiveInfo(); // 최신 정보 갱신
+        try { await bot.refreshLiveInfo(); } catch(e) {}
         
         ws.send(JSON.stringify({ 
             type: 'connectResult', 
@@ -87,9 +84,7 @@ wss.on('connection', async (ws, req) => {
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
             ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
-        } catch (e) {
-            ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: [] }));
-        }
+        } catch (e) {}
     };
 
     ws.on('message', async (message) => {
@@ -101,8 +96,8 @@ wss.on('connection', async (ws, req) => {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
                 
                 bot.setOnStateChangeListener((type, payload) => {
-                    bot?.saveAll();
-                    broadcast(type, payload);
+                    bot?.saveAll(); 
+                    broadcast(type, payload); // 상태 변경 시 즉시 전파
                 });
                 
                 bot.setOnChatListener((chat) => {
@@ -124,27 +119,64 @@ wss.on('connection', async (ws, req) => {
                     await sendFullState(bot);
                     break;
 
-                case 'updateSettings': bot.settings.updateSettings(data.data); break;
-                case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
-                case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
-                case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
-                case 'addCounter': bot.counters.addCounter(data.data.trigger, data.data.response, data.data.oncePerDay); break;
-                case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
-                case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
-                case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
-                case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
+                // [핵심] 모든 변경 작업 후 broadcast 호출 필수
+                case 'updateSettings': 
+                    bot.settings.updateSettings(data.data); 
+                    // settingsManager 내부에서 notify 호출됨 -> setOnStateChangeListener 발동 -> broadcast됨
+                    break;
 
+                case 'addCommand': 
+                    bot.commands.addCommand(data.data.trigger, data.data.response); 
+                    // addCommand 내부에서 notify 호출됨 -> broadcast됨
+                    break;
+                case 'removeCommand': 
+                    bot.commands.removeCommand(data.data.trigger); 
+                    break;
+                case 'updateCommand': 
+                    bot.commands.removeCommand(data.data.oldTrigger); 
+                    bot.commands.addCommand(data.data.trigger, data.data.response); 
+                    break;
                 case 'toggleCommand': 
                     const tCmd = bot.commands.getCommands().find(c => (c.triggers?.[0] || (c as any).trigger) === data.data.trigger);
-                    if (tCmd) { tCmd.enabled = data.data.enabled; bot.saveAll(); broadcast('commandsUpdate', bot.commands.getCommands()); }
+                    if (tCmd) { 
+                        tCmd.enabled = data.data.enabled; 
+                        bot.saveAll(); 
+                        broadcast('commandsUpdate', bot.commands.getCommands()); 
+                    }
+                    break;
+
+                case 'addCounter': 
+                    bot.counters.addCounter(data.data.trigger, data.data.response, data.data.oncePerDay); 
+                    break;
+                case 'removeCounter': 
+                    bot.counters.removeCounter(data.data.trigger); 
                     break;
                 case 'toggleCounter':
                     const tCnt = bot.counters.getCounters().find(c => c.trigger === data.data.trigger);
-                    if (tCnt) { tCnt.enabled = data.data.enabled; bot.saveAll(); broadcast('countersUpdate', bot.counters.getCounters()); }
+                    if (tCnt) { 
+                        tCnt.enabled = data.data.enabled; 
+                        bot.saveAll(); 
+                        broadcast('countersUpdate', bot.counters.getCounters()); 
+                    }
+                    break;
+
+                case 'addMacro': 
+                    bot.macros.addMacro(data.data.interval, data.data.message); 
+                    break;
+                case 'removeMacro': 
+                    bot.macros.removeMacro(data.data.id); 
+                    break;
+                case 'updateMacro': 
+                    bot.macros.removeMacro(data.data.id); 
+                    bot.macros.addMacro(data.data.interval, data.data.message); 
                     break;
                 case 'toggleMacro':
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
-                    if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
+                    if (tMac) { 
+                        tMac.enabled = data.data.enabled; 
+                        bot.saveAll(); 
+                        broadcast('macrosUpdate', bot.macros.getMacros()); 
+                    }
                     break;
 
                 case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
@@ -156,22 +188,28 @@ wss.on('connection', async (ws, req) => {
                     }
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
+                
                 case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
                 case 'spinRoulette': 
                     const rWinner = bot.roulette.spin();
                     if (rWinner) broadcast('drawWinnerResult', { winners: [{ nickname: rWinner.text, userIdHash: 'roulette' }] });
                     break;
                 case 'resetRoulette': bot.roulette.reset(); break;
+
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
+
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;
                 case 'clearParticipants': bot.participation.clearAllData(); break;
+                case 'updateMaxParticipants': bot.participation.updateMax(data.payload.count); break;
+
                 case 'updateGreetSettings': bot.greet.updateSettings(data.data); break;
                 case 'resetGreetHistory': bot.greet.clearHistory(); break;
+
                 case 'controlMusic':
                     if (data.action === 'skip') bot.songs.skipSong();
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
@@ -184,10 +222,7 @@ wss.on('connection', async (ws, req) => {
 
     ws.on('close', () => {
         clients.delete(ws);
-        if (clients.size === 0) {
-            // [중요] 연결이 끊겨도 봇을 즉시 삭제하지 않고 유지 (Eager Loading)
-            // channelClientsMap.delete(channelId); 
-        }
+        if (clients.size === 0) channelClientsMap.delete(channelId);
     });
 });
 

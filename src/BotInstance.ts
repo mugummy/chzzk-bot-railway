@@ -136,8 +136,11 @@ export class BotInstance {
 
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
-        const match = donation.message?.match(/(?:https?:\/\/)?(?:www\.)?youtu\.?be(?:\.com\/watch\?v=|\/)([a-zA-Z0-9_-]{11})/);
-        if (this.isLoggedIn && match) { try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {} }
+        const msg = donation.message || '';
+        // [수정] 후원 메시지를 SongManager로 전달하여 링크 파싱 위임
+        if (this.isLoggedIn && msg) { 
+            try { await this.songs.addSongFromDonation(donation, msg, this.settings.getSettings()); } catch(e) {} 
+        }
     }
 
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "https://ssl.pstatic.net/static/nng/glstat/game/favicon.ico", followerCount: this.channel?.followerCount || 0 }; }
