@@ -1,4 +1,4 @@
-import { ChzzkClient, ChzzkChat, ChatEvent, DonationEvent } from 'chzzk';
+import { ChzzkClient, ChzzkChat, ChatEvent, DonationEvent, LiveDetail, Channel } from 'chzzk';
 import { CommandManager } from './CommandManager';
 import { SongManager } from './SongManager';
 import { VoteManager } from './VoteManager';
@@ -17,6 +17,11 @@ export class BotInstance {
     public chat: ChzzkChat | null = null;
     private botUserIdHash: string | null = null;
 
+    // 외부 연동용 공개 데이터
+    public liveDetail: LiveDetail | null = null;
+    public channel: Channel | null = null;
+
+    // 매니저 객체들
     public commands!: CommandManager;
     public songs!: SongManager;
     public votes!: VoteManager;
@@ -30,6 +35,7 @@ export class BotInstance {
     public roulette!: RouletteManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
+    private onChatCallback: (chat: ChatEvent) => void = () => {};
 
     constructor(private channelId: string, nidAuth: string, nidSes: string) {
         this.client = new ChzzkClient({ nidAuth, nidSession: nidSes });
@@ -37,6 +43,10 @@ export class BotInstance {
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
+    }
+
+    public setOnChatListener(callback: (chat: ChatEvent) => void) {
+        this.onChatCallback = callback;
     }
 
     private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
@@ -58,10 +68,11 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
 
         try {
-            const live = await this.client.live.detail(this.channelId);
-            if (!live?.chatChannelId) throw new Error('Chat ID Missing');
+            this.channel = await this.client.channel(this.channelId);
+            this.liveDetail = await this.client.live.detail(this.channelId);
+            if (!this.liveDetail?.chatChannelId) throw new Error('Chat ID Missing');
 
-            this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: live.chatChannelId });
+            this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
             
             this.chat.on('chat', (chat) => this.handleChat(chat));
             this.chat.on('donation', (donation) => this.handleDonation(donation));
@@ -71,39 +82,53 @@ export class BotInstance {
                     const self = await this.chat?.selfProfile();
                     this.botUserIdHash = self?.userIdHash || null;
                     this.macros.setChatClient(this.chat!);
+                    console.log(`[BotInstance] Logged in as: ${self?.nickname}`);
                 } catch (e) {
-                    console.error('[BotInstance] Auth Error: NID_AUTH/SES is invalid');
-                    this.notify('error', '봇 로그인이 실패했습니다. 환경변수를 확인하세요.');
+                    console.error('[BotInstance] Auth Error: NID_AUTH/SES is invalid. Bot will remain in read-only mode.');
+                    this.notify('error', '봇 로그인에 실패했습니다 (NID_AUTH/SES 만료). 채팅 전송이 제한됩니다.');
                 }
             });
 
             await this.chat.connect();
         } catch (err) {
-            console.error('[BotInstance] Connection Failed:', err);
+            console.error('[BotInstance] Setup Critical Error:', err);
         }
     }
 
     private async handleChat(chat: ChatEvent) {
-        if (!this.settings.getSettings().chatEnabled) return;
-        if (chat.profile.userIdHash === this.botUserIdHash) return;
+        // [중요] 봇 본인의 채팅은 무시 (무한 루프 방지)
+        if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
+
+        // 대시보드 실시간 채팅창 전송
+        this.onChatCallback(chat);
+
+        // 기능 실행 (기록 및 통계는 chatEnabled와 상관없이 수행)
         await this.greet.handleChat(chat, this.chat!);
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
-        const msg = chat.message.trim();
-        if (msg.startsWith('!')) {
-            const cmd = msg.split(' ')[0];
-            if (['!노래', '!신청', '!스킵'].includes(cmd)) await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
-            else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
+
+        // 명령어 및 응답 처리 (오직 chatEnabled가 켜져 있을 때만 실행)
+        if (this.settings.getSettings().chatEnabled) {
+            const msg = chat.message.trim();
+            if (msg.startsWith('!')) {
+                const cmd = msg.split(' ')[0];
+                if (['!노래', '!신청', '!스킵'].includes(cmd)) await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
+                else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
+            }
+
+            if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
+            else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
         }
-        if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
-        else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
     }
 
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
-        const match = donation.message?.match(/(?:https?:\/\/)?(?:www\.)?youtu\.?be(?:\.com\/watch\?v=|\/)([a-zA-Z0-9_-]{11})/);
-        if (match) { try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {} }
+        const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
+        const match = donation.message?.match(youtubeUrlRegex);
+        if (match && match[0]) {
+            try { await this.songs.addSongFromDonation(donation, match[0], this.settings.getSettings()); } catch(e) {}
+        }
     }
 
     public async saveAll() {
