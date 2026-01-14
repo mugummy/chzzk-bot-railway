@@ -25,11 +25,16 @@ export const defaultSettings: BotSettings = {
 export class SettingsManager {
     private settings: BotSettings;
     private onStateChangeCallback: () => void = () => {};
-    // [중요] 채팅 알림 트리거를 위한 콜백 추가
     private onChatEnabledChangeCallback: (enabled: boolean) => void = () => {};
 
     constructor(initialSettings?: Partial<BotSettings>) {
+        // [핵심] DB 값이 있으면 그것을 우선 사용 (깊은 병합)
         this.settings = { ...defaultSettings, ...initialSettings };
+        
+        // participationCommand가 비어있다면 기본값 보장
+        if (!this.settings.participationCommand) {
+            this.settings.participationCommand = '!시참';
+        }
     }
 
     public setOnStateChangeListener(callback: () => void) {
@@ -50,11 +55,8 @@ export class SettingsManager {
 
     public updateSettings(newSettings: Partial<BotSettings>) {
         const prevChatEnabled = this.settings.chatEnabled;
-        
-        // 설정 업데이트
         this.settings = { ...this.settings, ...newSettings };
         
-        // [핵심] chatEnabled 값이 실제로 바뀌었을 때만 알림 콜백 호출
         if (newSettings.chatEnabled !== undefined && newSettings.chatEnabled !== prevChatEnabled) {
             this.onChatEnabledChangeCallback(newSettings.chatEnabled);
         }
