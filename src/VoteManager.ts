@@ -22,9 +22,12 @@ export interface VoteSession {
     settings: any;
     startTime: number | null;
     totalVotes: number;
-    voters: Voter[]; // [추가] 투표자 명단
+    voters: Voter[];
 }
 
+/**
+ * VoteManager: 실시간 투표 및 투표자 명단을 관리합니다.
+ */
 export class VoteManager {
     private currentVote: VoteSession | null = null;
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
@@ -40,6 +43,12 @@ export class VoteManager {
         this.bot.saveAll();
     }
 
+    // [핵심] DB에서 불러온 투표 데이터를 세션에 주입하는 메서드 (복구됨)
+    public setCurrentVote(vote: VoteSession) {
+        this.currentVote = vote;
+        // 초기화 시 notify는 호출하지 않음 (무한 루프 방지)
+    }
+
     public createVote(question: string, options: VoteOption[], settings: any) {
         if (!question || !options || options.length < 2) return;
 
@@ -52,7 +61,7 @@ export class VoteManager {
             settings,
             startTime: null,
             totalVotes: 0,
-            voters: [] // 명단 초기화
+            voters: []
         };
         this.notify();
     }
@@ -73,20 +82,24 @@ export class VoteManager {
         if (this.currentVote) {
             this.currentVote.isActive = false;
             
-            // [추가] DB에 투표 상세 로그 저장 (비동기)
+            // DB 로그 저장
             if (this.currentVote.voters.length > 0) {
-                const payload = this.currentVote.voters.map(v => ({
-                    channel_id: this.bot.getChannelId(),
-                    vote_id: this.currentVote!.id,
-                    user_id_hash: v.userIdHash,
-                    nickname: v.nickname,
-                    option_id: v.optionId
-                }));
-                await supabase.from('vote_logs').insert(payload);
+                try {
+                    const payload = this.currentVote.voters.map(v => ({
+                        channel_id: this.bot.getChannelId(),
+                        vote_id: this.currentVote!.id,
+                        user_id_hash: v.userIdHash,
+                        nickname: v.nickname,
+                        option_id: v.optionId
+                    }));
+                    await supabase.from('vote_logs').insert(payload);
+                } catch (e) {
+                    console.error('[VoteManager] Log Save Error:', e);
+                }
             }
 
             this.notify();
-            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표가 집계되었습니다.`);
+            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표 집계 완료`);
         }
     }
 
@@ -102,7 +115,7 @@ export class VoteManager {
         
         if (!isNaN(optionIndex) && this.currentVote.options[optionIndex]) {
             const userId = chat.profile.userIdHash;
-            // 중복 투표 방지
+            // 중복 투표 체크
             if (!this.currentVote.voters.some(v => v.userIdHash === userId)) {
                 const optionId = this.currentVote.options[optionIndex].id;
                 this.currentVote.results[optionId]++;
@@ -119,6 +132,5 @@ export class VoteManager {
 
     public getState() { return { currentVote: this.currentVote }; }
     
-    // [추가] 추첨기 연동을 위한 투표자 목록 반환
     public getVoters() { return this.currentVote?.voters || []; }
 }
