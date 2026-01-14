@@ -44,7 +44,13 @@ export class DrawManager {
 
     public injectCandidatesFromVote(voters: any[]) {
         this.candidates.clear();
-        voters.forEach(v => this.candidates.set(v.userIdHash, { userIdHash: v.userIdHash, nickname: v.nickname, source: 'vote' }));
+        voters.forEach(v => {
+            this.candidates.set(v.userIdHash, {
+                userIdHash: v.userIdHash,
+                nickname: v.nickname,
+                source: 'vote'
+            });
+        });
         this.notify();
     }
 
@@ -57,16 +63,28 @@ export class DrawManager {
         else if (this.settings.chatType === 'command' && chat.message.trim() === this.settings.chatCommand) isValid = true;
 
         if (isValid && !this.candidates.has(chat.profile.userIdHash)) {
-            this.candidates.set(chat.profile.userIdHash, { userIdHash: chat.profile.userIdHash, nickname: chat.profile.nickname, source: 'chat' });
+            this.candidates.set(chat.profile.userIdHash, {
+                userIdHash: chat.profile.userIdHash,
+                nickname: chat.profile.nickname,
+                source: 'chat'
+            });
             this.notify();
         }
     }
 
     public handleDonation(donation: DonationEvent) {
         if (this.settings.mode !== 'donation' || this.isRolling) return;
-        let isValid = (this.settings.donationType === 'all') || (donation.payAmount === this.settings.donationAmount);
+
+        let isValid = false;
+        if (this.settings.donationType === 'all') isValid = true;
+        else if (this.settings.donationType === 'specific' && donation.payAmount === this.settings.donationAmount) isValid = true;
+
         if (isValid && !this.candidates.has(donation.profile.userIdHash)) {
-            this.candidates.set(donation.profile.userIdHash, { userIdHash: donation.profile.userIdHash, nickname: donation.profile.nickname, source: 'donation' });
+            this.candidates.set(donation.profile.userIdHash, {
+                userIdHash: donation.profile.userIdHash,
+                nickname: donation.profile.nickname,
+                source: 'donation'
+            });
             this.notify();
         }
     }
@@ -74,15 +92,23 @@ export class DrawManager {
     public draw(count: number = 1) {
         const pool = Array.from(this.candidates.values());
         if (pool.length === 0) return;
+
         this.isRolling = true;
         this.winners = [];
         this.notify();
 
+        // 3초간 슬롯머신 애니메이션 (대시보드/오버레이 동기화)
         setTimeout(() => {
             this.isRolling = false;
-            const shuffled = [...pool].sort(() => Math.random() - 0.5);
+            // 피셔-예이츠 셔플
+            const shuffled = [...pool];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
             this.winners = shuffled.slice(0, Math.min(count, shuffled.length));
             this.notify();
+
             if (this.winners.length > 0 && this.bot.chat && this.bot.chat.connected) {
                 const names = this.winners.map(w => w.nickname).join(', ');
                 this.bot.chat.sendChat(`🎉 [추첨 결과] 당첨자: [ ${names} ] 축하드립니다!`);
@@ -98,6 +124,12 @@ export class DrawManager {
     }
 
     public getState() {
-        return { candidatesCount: this.candidates.size, settings: this.settings, isRolling: this.isRolling, winners: this.winners };
+        return {
+            candidatesCount: this.candidates.size,
+            candidates: Array.from(this.candidates.values()).slice(-10),
+            settings: this.settings,
+            isRolling: this.isRolling,
+            winners: this.winners
+        };
     }
 }
