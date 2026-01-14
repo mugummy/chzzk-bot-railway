@@ -11,12 +11,8 @@ export class PointManager {
     private points: { [userIdHash: string]: UserPoint } = {};
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(initialPoints?: { [userIdHash: string]: UserPoint }) {
-        this.points = initialData || {};
-    }
-
-    // [수정] 초기 데이터 로드 지원
-    constructor(initialData: any) {
+    // [수정] 중복된 생성자 제거 및 단일화
+    constructor(initialData?: { [userIdHash: string]: UserPoint }) {
         this.points = initialData || {};
     }
 
