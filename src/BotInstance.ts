@@ -12,10 +12,6 @@ import { ParticipationManager } from './ParticipationManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
 
-/**
- * BotInstance: 개별 채널의 실시간 로직을 총괄하는 핵심 엔진
- * 모든 기능을 독립된 매니저로 관리하며 대시보드와 WebSocket으로 통신합니다.
- */
 export class BotInstance {
     private client: ChzzkClient;
     public chat: ChzzkChat | null = null;
@@ -55,23 +51,24 @@ export class BotInstance {
         this.onChatCallback = callback;
     }
 
-    private notify(type: string, payload: any) { 
-        this.onStateChangeCallback(type, payload); 
-    }
+    private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
 
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
 
-        // 매니저 초기화
         this.settings = new SettingsManager(data.settings);
+        
+        // [수정] 상태 변경 알림은 대시보드용, 채팅 알림은 chatEnabled 변경 시에만 발동
         this.settings.setOnStateChangeListener(() => {
-            const s = this.settings.getSettings();
-            if (this.isLoggedIn && this.chat) {
-                // 실제 변경 시에만 채팅 공지 (중복 방지 로직은 SettingsManager에 있음)
-                this.chat.sendChat(s.chatEnabled ? "🟢 gummybot 응답 기능이 활성화되었습니다." : "🔴 gummybot 응답 기능이 비활성화되었습니다.");
-            }
-            this.notify('settingsUpdate', s);
+            this.notify('settingsUpdate', this.settings.getSettings());
             this.saveAll();
+        });
+
+        // [신규] chatEnabled 변경 감지 시 채팅 전송
+        this.settings.setOnChatEnabledChange((enabled) => {
+            if (this.isLoggedIn && this.chat) {
+                this.chat.sendChat(enabled ? "🟢 gummybot 응답 기능이 활성화되었습니다." : "🔴 gummybot 응답 기능이 비활성화되었습니다.");
+            }
         });
 
         this.commands = new CommandManager(this as any, data.commands);
@@ -139,8 +136,6 @@ export class BotInstance {
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
-        
-        // 데이터 기록
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);

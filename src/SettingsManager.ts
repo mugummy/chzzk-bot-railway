@@ -25,6 +25,8 @@ export const defaultSettings: BotSettings = {
 export class SettingsManager {
     private settings: BotSettings;
     private onStateChangeCallback: () => void = () => {};
+    // [중요] 채팅 알림 트리거를 위한 콜백 추가
+    private onChatEnabledChangeCallback: (enabled: boolean) => void = () => {};
 
     constructor(initialSettings?: Partial<BotSettings>) {
         this.settings = { ...defaultSettings, ...initialSettings };
@@ -32,6 +34,10 @@ export class SettingsManager {
 
     public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
+    }
+
+    public setOnChatEnabledChange(callback: (enabled: boolean) => void) {
+        this.onChatEnabledChangeCallback = callback;
     }
 
     private notify() {
@@ -43,14 +49,16 @@ export class SettingsManager {
     }
 
     public updateSettings(newSettings: Partial<BotSettings>) {
-        // [수정] 실제 값이 변경되었는지 확인 (불필요한 알림 방지)
-        const hasChanged = Object.keys(newSettings).some(key => {
-            return (this.settings as any)[key] !== (newSettings as any)[key];
-        });
-
-        if (hasChanged) {
-            this.settings = { ...this.settings, ...newSettings };
-            this.notify();
+        const prevChatEnabled = this.settings.chatEnabled;
+        
+        // 설정 업데이트
+        this.settings = { ...this.settings, ...newSettings };
+        
+        // [핵심] chatEnabled 값이 실제로 바뀌었을 때만 알림 콜백 호출
+        if (newSettings.chatEnabled !== undefined && newSettings.chatEnabled !== prevChatEnabled) {
+            this.onChatEnabledChangeCallback(newSettings.chatEnabled);
         }
+
+        this.notify();
     }
 }
