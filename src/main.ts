@@ -58,22 +58,29 @@ wss.on('connection', async (ws, req) => {
 
     const sendFullState = async (bot: any) => {
         if (!bot) return;
-        await bot.refreshLiveInfo();
+        try { await bot.refreshLiveInfo(); } catch(e) {}
         
-        ws.send(JSON.stringify({ type: 'connectResult', success: true, channelInfo: bot.getChannelInfo(), liveStatus: bot.getLiveStatus() }));
+        ws.send(JSON.stringify({ 
+            type: 'connectResult', 
+            success: true, 
+            channelInfo: bot.getChannelInfo(),
+            liveStatus: bot.getLiveStatus()
+        }));
+
         ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
         ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
         ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
         ws.send(JSON.stringify({ type: 'macrosUpdate', payload: bot.macros.getMacros() }));
-        
-        // [중요] 플레이어와 대시보드 모두에 현재 노래 및 재생 상태 전송
         ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
-        
         ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
         ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
         ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
-        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: channelChatHistory.get(channelId) || [] }));
+        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
+        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
         
+        const history = channelChatHistory.get(channelId) || [];
+        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: history }));
+
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
             ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
@@ -87,10 +94,12 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
+                
                 bot.setOnStateChangeListener((type, payload) => {
                     bot?.saveAll(); 
                     broadcast(type, payload);
                 });
+                
                 bot.setOnChatListener((chat) => {
                     const history = channelChatHistory.get(channelId) || [];
                     history.push(chat);
@@ -98,6 +107,7 @@ wss.on('connection', async (ws, req) => {
                     channelChatHistory.set(channelId, history);
                     broadcast('newChat', chat);
                 });
+
                 await sendFullState(bot);
                 return;
             }
@@ -107,20 +117,14 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
-                case 'controlMusic':
-                    if (data.action === 'skip') bot.songs.skipSong();
-                    if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
-                    if (data.action === 'remove') bot.songs.removeSong(data.index);
-                    if (data.action === 'playNext') bot.songs.playNext();
-                    break;
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'addCounter': bot.counters.addCounter(data.data.trigger, data.data.response, data.data.oncePerDay); break;
                 case 'removeCounter': bot.counters.removeCounter(data.data.trigger); break;
-                case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message, data.data.title); break;
+                case 'addMacro': bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'removeMacro': bot.macros.removeMacro(data.data.id); break;
-                case 'updateMacro': bot.macros.updateMacro(data.data.id, data.data.interval, data.data.message, data.data.title); break;
+                case 'updateMacro': bot.macros.removeMacro(data.data.id); bot.macros.addMacro(data.data.interval, data.data.message); break;
                 case 'toggleCommand': 
                     const tCmd = bot.commands.getCommands().find(c => (c.triggers?.[0] || (c as any).trigger) === data.data.trigger);
                     if (tCmd) { tCmd.enabled = data.data.enabled; bot.saveAll(); broadcast('commandsUpdate', bot.commands.getCommands()); }
@@ -148,16 +152,23 @@ wss.on('connection', async (ws, req) => {
                     if (rWinner) broadcast('drawWinnerResult', { winners: [{ nickname: rWinner.text, userIdHash: 'roulette' }] });
                     break;
                 case 'resetRoulette': bot.roulette.reset(); break;
+                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
+                case 'startVote': bot.votes.startVote(); break;
+                case 'endVote': bot.votes.endVote(); break;
+                case 'resetVote': bot.votes.resetVote(); break;
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;
                 case 'clearParticipants': bot.participation.clearAllData(); break;
                 case 'updateGreetSettings': bot.greet.updateSettings(data.data); break;
                 case 'resetGreetHistory': bot.greet.clearHistory(); break;
-                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
-                case 'startVote': bot.votes.startVote(); break;
-                case 'endVote': bot.votes.endVote(); break;
-                case 'resetVote': bot.votes.resetVote(); break;
+                case 'controlMusic':
+                    if (data.action === 'skip') bot.songs.skipSong();
+                    // [핵심] togglePlayPause 호출 시 내부적으로 playerControl 브로드캐스트 발생
+                    if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
+                    if (data.action === 'playNext') bot.songs.playNext();
+                    if (data.action === 'remove') bot.songs.removeSong(data.index);
+                    break;
             }
         } catch (err) { console.error('[WS] System Error:', err); }
     });
