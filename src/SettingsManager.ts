@@ -1,7 +1,3 @@
-/**
- * SettingsManager: 봇의 모든 전역 설정을 관리합니다.
- * 상태 변경 시 자동으로 BotInstance에 알림을 보냅니다.
- */
 export interface BotSettings {
     chatEnabled: boolean;
     songRequestMode: 'all' | 'cooldown' | 'donation' | 'off';
@@ -46,16 +42,15 @@ export class SettingsManager {
         return this.settings;
     }
 
-    /**
-     * 설정 업데이트 및 동기화 발생
-     */
     public updateSettings(newSettings: Partial<BotSettings>) {
-        this.settings = { ...this.settings, ...newSettings };
-        this.notify();
-    }
+        // [수정] 실제 값이 변경되었는지 확인 (불필요한 알림 방지)
+        const hasChanged = Object.keys(newSettings).some(key => {
+            return (this.settings as any)[key] !== (newSettings as any)[key];
+        });
 
-    public toggleChat(enabled: boolean) {
-        this.settings.chatEnabled = enabled;
-        this.notify();
+        if (hasChanged) {
+            this.settings = { ...this.settings, ...newSettings };
+            this.notify();
+        }
     }
 }
