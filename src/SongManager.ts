@@ -47,18 +47,17 @@ export class SongManager {
         const subCmd = parts[1];
 
         if (cmd !== '!노래') return;
-        if (settings.songRequestMode === 'off') return; // 조용히 무시 (채팅 공해 방지)
+        if (settings.songRequestMode === 'off') return; 
 
         if (!subCmd || subCmd === '도움말') {
             return chzzkChat.sendChat('🎵 [명령어] !노래 신청 [링크], !노래 스킵, !노래 대기열');
         }
 
         if (subCmd === '신청') {
-            if (settings.songRequestMode === 'donation') return chzzkChat.sendChat(`💸 후원(${settings.minDonationAmount}치즈)으로만 신청 가능합니다.`);
+            if (settings.songRequestMode === 'donation') return chzzkChat.sendChat(`💸 후원으로만 신청 가능합니다.`);
             
             const query = parts.slice(2).join(' ');
-            // [수정] 링크 형식 체크 완화 (youtube 도메인만 있으면 일단 시도)
-            if (!query.includes('youtu')) return chzzkChat.sendChat('❌ 유튜브 링크를 입력해주세요.');
+            if (!this.isValidYoutubeLink(query)) return chzzkChat.sendChat('❌ 유튜브 링크를 입력해주세요.');
 
             if (settings.songRequestMode === 'cooldown') {
                 const lastTime = this.userCooldowns.get(chat.profile.userIdHash) || 0;
@@ -95,9 +94,8 @@ export class SongManager {
     public async addSongFromDonation(donation: DonationEvent, message: string, settings: any) {
         if (donation.payAmount !== (settings.minDonationAmount || 0)) return;
         
-        // 후원 메시지 내 링크 추출 (가장 먼저 발견된 URL 하나만 처리)
         const urlMatch = message.match(/(https?:\/\/[^\s]+)/);
-        if (urlMatch && urlMatch[0].includes('youtu')) {
+        if (urlMatch && this.isValidYoutubeLink(urlMatch[0])) {
             try {
                 const song = await this.fetchSongInfo(urlMatch[0], donation.profile.nickname);
                 this.queue.push(song);
@@ -108,36 +106,24 @@ export class SongManager {
         }
     }
 
-    // [핵심] 단일 영상 ID 추출 로직 (믹스/재생목록 무시)
+    private isValidYoutubeLink(text: string): boolean {
+        return /(?:https?:\/\/)?(?:www\.)?(?:youtube\.com\/(?:watch\?v=|shorts\/)|youtu\.be\/)([a-zA-Z0-9_-]{11})/.test(text);
+    }
+
     private async fetchSongInfo(query: string, requester: string): Promise<Song> {
         let videoId = query;
-        
         try {
-            // URL 파싱 시도
             if (query.includes('://')) {
                 const url = new URL(query);
-                // 1. v 파라미터가 최우선 (watch?v=ID)
-                if (url.searchParams.has('v')) {
-                    videoId = url.searchParams.get('v')!;
-                } 
-                // 2. Shorts 경로 처리
-                else if (url.pathname.includes('/shorts/')) {
-                    videoId = url.pathname.split('/shorts/')[1];
-                } 
-                // 3. youtu.be 단축 URL 처리
-                else if (url.hostname === 'youtu.be') {
-                    videoId = url.pathname.slice(1);
-                }
+                if (url.searchParams.has('v')) videoId = url.searchParams.get('v')!;
+                else if (url.pathname.includes('/shorts/')) videoId = url.pathname.split('/shorts/')[1];
+                else if (url.hostname === 'youtu.be') videoId = url.pathname.slice(1);
             }
-        } catch (e) {
-            // URL 파싱 실패 시 정규식이나 원본 문자열 사용
-        }
+        } catch (e) {}
 
-        // ID만 남기고 나머지(재생목록 list 등)는 버려짐 -> 단일 영상 정보 획득
         const info = await ytdl.getBasicInfo(videoId);
-        
         return {
-            videoId: info.videoDetails.videoId, // ytdl이 정규화한 ID 사용
+            videoId: info.videoDetails.videoId,
             title: info.videoDetails.title,
             thumbnail: info.videoDetails.thumbnails[0]?.url,
             requester,
@@ -170,5 +156,13 @@ export class SongManager {
         this.isPlaying = !this.isPlaying;
         this.onStateChangeCallback('playerControl', { action: this.isPlaying ? 'play' : 'pause' });
         this.notify();
+    }
+
+    // [핵심] 누락되었던 데이터 반환 메서드 복구
+    public getData() { 
+        return { 
+            songQueue: this.queue, 
+            currentSong: this.currentSong 
+        }; 
     }
 }
