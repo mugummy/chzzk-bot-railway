@@ -1,81 +1,50 @@
-import { ChatEvent, ChzzkChat } from 'chzzk';
+import { ChatEvent } from 'chzzk';
+import { BotSettings } from './SettingsManager';
 
-export interface UserPointData {
+export interface UserPoint {
     nickname: string;
     points: number;
     lastMessageTime: number;
 }
 
-/**
- * PointManager: 채팅 기반 포인트 지급 및 랭킹 관리를 담당합니다.
- */
 export class PointManager {
-    private points: { [userIdHash: string]: UserPointData } = {};
-    private onStateChangeCallback: () => void = () => {};
+    private points: { [userIdHash: string]: UserPoint } = {};
+    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(initialPoints: { [userId: string]: any }) {
-        this.points = initialPoints || {};
+    constructor(initialPoints?: { [userIdHash: string]: UserPoint }) {
+        this.points = initialData || {};
     }
 
-    public setOnStateChangeListener(callback: () => void) {
+    // [수정] 초기 데이터 로드 지원
+    constructor(initialData: any) {
+        this.points = initialData || {};
+    }
+
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
     private notify() {
-        this.onStateChangeCallback();
+        this.onStateChangeCallback('pointsUpdate', this.getPointsData());
     }
 
-    /**
-     * 채팅 수신 시 포인트 지급 (설정된 쿨타임 준수)
-     */
-    public awardPoints(chat: ChatEvent, settings: any) {
+    public awardPoints(chat: ChatEvent, settings: BotSettings) {
         const userId = chat.profile.userIdHash;
         const now = Date.now();
-        const perChat = settings.pointsPerChat || 1;
-        const cooldown = (settings.pointsCooldown || 60) * 1000;
+        const user = this.points[userId] || { nickname: chat.profile.nickname, points: 0, lastMessageTime: 0 };
 
-        if (!this.points[userId]) {
-            this.points[userId] = {
-                nickname: chat.profile.nickname,
-                points: perChat,
-                lastMessageTime: now
-            };
-            this.notify();
-        } else {
-            const userData = this.points[userId];
-            if (now - userData.lastMessageTime >= cooldown) {
-                userData.points += perChat;
-                userData.nickname = chat.profile.nickname; // 닉네임 최신화
-                userData.lastMessageTime = now;
-                this.notify();
-            }
+        // 쿨타임 체크 (밀리초 단위 변환)
+        if (now - user.lastMessageTime >= settings.pointsCooldown * 1000) {
+            user.points += settings.pointsPerChat;
+            user.lastMessageTime = now;
+            user.nickname = chat.profile.nickname; // 닉네임 갱신
+            this.points[userId] = user;
+            this.notify(); // 저장 트리거
         }
     }
 
-    /**
-     * 수동 포인트 조절 (관리자 기능 등)
-     */
-    public setPoints(userId: string, amount: number, nickname: string) {
-        if (this.points[userId]) {
-            this.points[userId].points = amount;
-        } else {
-            this.points[userId] = {
-                nickname,
-                points: amount,
-                lastMessageTime: 0
-            };
-        }
-        this.notify();
-    }
-
-    /**
-     * 랭킹 정보 가져오기 (상위 10명)
-     */
-    public getRanking() {
-        return Object.entries(this.points)
-            .map(([id, data]) => ({ id, ...data }))
-            .sort((a, b) => b.points - a.points)
-            .slice(0, 10);
+    public getPoints(userId: string): number {
+        return this.points[userId]?.points || 0;
     }
 
     public getPointsData() {
