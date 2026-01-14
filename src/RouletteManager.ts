@@ -1,7 +1,7 @@
 export interface RouletteItem {
     id: string;
     text: string;
-    weight: number; // 가중치 (1~10)
+    weight: number;
     color: string;
 }
 
@@ -37,7 +37,6 @@ export class RouletteManager {
         this.winner = null;
         this.notify();
 
-        // 가중치 기반 랜덤 추첨
         const totalWeight = this.items.reduce((sum, item) => sum + item.weight, 0);
         let random = Math.random() * totalWeight;
         let selectedItem = this.items[0];
@@ -50,12 +49,14 @@ export class RouletteManager {
             }
         }
 
-        // 스핀 애니메이션 시간(3초) 후 결과 확정
         setTimeout(() => {
             this.isSpinning = false;
             this.winner = selectedItem;
             this.notify();
-            if (this.bot.chat) this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selectedItem.text} ] 당첨!`);
+            // [수정] chat 객체 안전 접근
+            if (this.bot.chat && this.bot.chat.connected) {
+                this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selectedItem.text} ] 당첨!`);
+            }
         }, 3000);
 
         return selectedItem;
