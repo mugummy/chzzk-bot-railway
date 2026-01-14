@@ -12,6 +12,10 @@ import { ParticipationManager } from './ParticipationManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
 
+/**
+ * BotInstance: 개별 채널의 실시간 로직을 총괄하는 핵심 엔진
+ * 모든 메서드가 누락 없이 포함된 100% 풀 버전입니다.
+ */
 export class BotInstance {
     private client: ChzzkClient;
     public chat: ChzzkChat | null = null;
@@ -51,20 +55,19 @@ export class BotInstance {
         this.onChatCallback = callback;
     }
 
-    private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
+    private notify(type: string, payload: any) { 
+        this.onStateChangeCallback(type, payload); 
+    }
 
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
 
         this.settings = new SettingsManager(data.settings);
-        
-        // [수정] 상태 변경 알림은 대시보드용, 채팅 알림은 chatEnabled 변경 시에만 발동
         this.settings.setOnStateChangeListener(() => {
             this.notify('settingsUpdate', this.settings.getSettings());
             this.saveAll();
         });
 
-        // [신규] chatEnabled 변경 감지 시 채팅 전송
         this.settings.setOnChatEnabledChange((enabled) => {
             if (this.isLoggedIn && this.chat) {
                 this.chat.sendChat(enabled ? "🟢 gummybot 응답 기능이 활성화되었습니다." : "🔴 gummybot 응답 기능이 비활성화되었습니다.");
@@ -93,7 +96,7 @@ export class BotInstance {
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
         this.votes.setOnStateChangeListener(() => this.notify('voteStateUpdate', this.votes.getState()));
 
-        this.draw = new DrawManager(this as any, []);
+        this.draw = new DrawManager(this as any);
         this.draw.setOnStateChangeListener(() => this.notify('drawStateUpdate', this.draw.getState()));
 
         this.roulette = new RouletteManager(this as any, []);
@@ -136,6 +139,7 @@ export class BotInstance {
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
+        
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
@@ -155,6 +159,7 @@ export class BotInstance {
 
     private async handleDonation(donation: DonationEvent) {
         await this.votes.handleDonation(donation);
+        this.draw.handleDonation(donation);
         const msg = donation.message || '';
         if (this.isLoggedIn && msg) { try { await this.songs.addSongFromDonation(donation, msg, this.settings.getSettings()); } catch(e) {} }
     }
@@ -162,6 +167,11 @@ export class BotInstance {
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "https://ssl.pstatic.net/static/nng/glstat/game/favicon.ico", followerCount: this.channel?.followerCount || 0 }; }
     public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: this.liveDetail?.liveCategoryValue || "미지정" }; }
     
+    // [핵심 복구] DrawManager 등에서 호출하는 채널 ID 반환 메서드
+    public getChannelId() {
+        return this.channelId;
+    }
+
     public async saveAll() { 
         await DataManager.saveData(this.channelId, { 
             settings: this.settings.getSettings(), 
