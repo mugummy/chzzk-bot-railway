@@ -1,61 +1,74 @@
-import { BotInstance } from './BotInstance';
+export interface RouletteItem {
+    id: string;
+    text: string;
+    weight: number; // 가중치 (1~10)
+    color: string;
+}
 
-/**
- * RouletteManager: 실시간 룰렛 생성 및 당첨자 선정을 관리합니다.
- */
 export class RouletteManager {
-    private currentSession: any = null;
-    private onStateChangeCallback: () => void = () => {};
+    private items: RouletteItem[] = [];
+    private isSpinning: boolean = false;
+    private winner: RouletteItem | null = null;
+    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(private bot: BotInstance, initialData: any) {}
+    constructor(private bot: any, initialData?: any[]) {
+        this.items = initialData || [];
+    }
 
-    public setOnStateChangeListener(callback: () => void) {
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
-    private notify() { this.onStateChangeCallback(); }
+    private notify() {
+        this.onStateChangeCallback('rouletteStateUpdate', this.getState());
+        this.bot.saveAll();
+    }
 
-    /**
-     * 룰렛 생성 (main.ts의 createRoulette 명령어와 매칭)
-     */
-    public createRoulette(items: any[]) {
-        this.currentSession = {
-            items: items.map((item, i) => ({ id: i + 1, text: item.text, weight: item.weight })),
-            isActive: true,
-            winner: null
-        };
+    public createRoulette(items: RouletteItem[]) {
+        this.items = items;
+        this.winner = null;
         this.notify();
     }
 
-    /**
-     * 룰렛 돌리기
-     */
-    public spin() {
-        if (!this.currentSession || this.currentSession.items.length === 0) return;
+    public spin(): RouletteItem | null {
+        if (this.items.length === 0 || this.isSpinning) return null;
+        
+        this.isSpinning = true;
+        this.winner = null;
+        this.notify();
 
-        const items = this.currentSession.items;
-        const totalWeight = items.reduce((acc: number, i: any) => acc + i.weight, 0);
+        // 가중치 기반 랜덤 추첨
+        const totalWeight = this.items.reduce((sum, item) => sum + item.weight, 0);
         let random = Math.random() * totalWeight;
+        let selectedItem = this.items[0];
 
-        let winner = items[0];
-        for (const item of items) {
-            if (random < item.weight) {
-                winner = item;
+        for (const item of this.items) {
+            random -= item.weight;
+            if (random <= 0) {
+                selectedItem = item;
                 break;
             }
-            random -= item.weight;
         }
 
-        this.currentSession.winner = winner;
-        this.notify();
-        this.bot.chat?.sendChat(`🎰 룰렛 결과: [${winner.text}] 당첨!`);
-        return winner;
+        // 스핀 애니메이션 시간(3초) 후 결과 확정
+        setTimeout(() => {
+            this.isSpinning = false;
+            this.winner = selectedItem;
+            this.notify();
+            if (this.bot.chat) this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selectedItem.text} ] 당첨!`);
+        }, 3000);
+
+        return selectedItem;
     }
 
     public reset() {
-        this.currentSession = null;
+        this.items = [];
+        this.winner = null;
+        this.isSpinning = false;
         this.notify();
     }
 
-    public getState() { return { currentSession: this.currentSession }; }
+    public getState() {
+        return { items: this.items, isSpinning: this.isSpinning, winner: this.winner };
+    }
 }

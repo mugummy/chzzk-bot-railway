@@ -33,17 +33,14 @@ export class VoteManager {
         this.bot.saveAll();
     }
 
-    // [수정] 외부에서 상태 주입 가능하도록 (DB 로드용)
     public setCurrentVote(vote: VoteSession) {
         this.currentVote = vote;
-        // DB에 저장된 투표가 활성화 상태라면 복구
-        if (vote.isActive) {
-            // votedUsers는 메모리상에서만 관리하거나 필요시 DB에 별도 저장해야 함
-            // 현재 구조상으로는 재시작 시 중복 투표 방지 목록이 초기화됨 (허용 범위)
-        }
     }
 
     public createVote(question: string, options: VoteOption[], settings: any) {
+        // [수정] 옵션이 없거나 질문이 비어있으면 생성 거부
+        if (!question || !options || options.length < 2) return;
+
         this.currentVote = {
             id: `vote_${Date.now()}`,
             question,
@@ -63,7 +60,10 @@ export class VoteManager {
             this.currentVote.isActive = true;
             this.currentVote.startTime = Date.now();
             this.notify();
-            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 시작: ${this.currentVote.question}`);
+            if (this.bot.chat) {
+                const opts = this.currentVote.options.map((o, i) => `${i+1}. ${o.text}`).join(' / ');
+                this.bot.chat.sendChat(`📊 투표 시작: ${this.currentVote.question} [ ${opts} ] - 채팅으로 번호를 입력하세요!`);
+            }
         }
     }
 
@@ -71,8 +71,7 @@ export class VoteManager {
         if (this.currentVote) {
             this.currentVote.isActive = false;
             this.notify();
-            // 결과 집계 및 발표 로직
-            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표`);
+            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표가 집계되었습니다.`);
         }
     }
 
@@ -94,7 +93,7 @@ export class VoteManager {
     }
 
     public async handleDonation(donation: DonationEvent) {
-        // 후원 투표 로직 (가중치 등) 필요 시 구현
+        // 추후 후원 투표 기능 확장 가능
     }
 
     private castVote(userId: string, optionId: string) {
