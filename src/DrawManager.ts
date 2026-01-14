@@ -5,7 +5,7 @@ export interface DrawCandidate {
     userIdHash: string;
     nickname: string;
     source: 'chat' | 'donation' | 'vote';
-    value?: number; // 후원 금액 등
+    value?: number;
 }
 
 export interface DrawSettings {
@@ -29,9 +29,7 @@ export class DrawManager {
     private winners: DrawCandidate[] = [];
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(private bot: BotInstance, initialData: any) {
-        // 초기화 로직
-    }
+    constructor(private bot: BotInstance, initialData: any) {}
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
@@ -39,16 +37,16 @@ export class DrawManager {
 
     private notify() {
         this.onStateChangeCallback('drawStateUpdate', this.getState());
-        // 추첨 데이터는 실시간성이 강해 DB에 매번 저장할 필요는 없으나, 필요시 저장
+        this.bot.saveAll();
     }
 
     public startSession(keyword: string, settings: any) {
         this.candidates.clear();
         this.winners = [];
-        this.settings = settings; // 대시보드 설정을 덮어씀
+        this.settings = { ...this.settings, ...settings };
         this.notify();
         
-        if (this.bot.chat) {
+        if (this.bot.chat && this.bot.chat.connected) {
             let msg = `🎰 추첨 모집 시작! `;
             if (this.settings.mode === 'chat') {
                 msg += this.settings.chatType === 'any' ? "아무 채팅이나 치면 참가!" : `'${this.settings.chatCommand}' 입력 시 참가!`;
@@ -59,9 +57,23 @@ export class DrawManager {
         }
     }
 
+    // [신규] 투표자 데이터를 후보군으로 강제 주입 (main.ts에서 사용)
+    public injectCandidatesFromVote(voters: any[]) {
+        this.candidates.clear();
+        voters.forEach(v => {
+            this.candidates.set(v.userIdHash, {
+                userIdHash: v.userIdHash,
+                nickname: v.nickname,
+                source: 'vote'
+            });
+        });
+        this.notify();
+    }
+
     public handleChat(chat: ChatEvent) {
         if (this.settings.mode !== 'chat' || this.isRolling) return;
-        if (chat.profile.userIdHash === this.bot.getChannelId()) return; // 봇 제외
+        // 봇 자신 제외
+        if (chat.profile.userIdHash === this.bot.getChannelId()) return;
 
         let isValid = false;
         if (this.settings.chatType === 'any') isValid = true;
@@ -73,7 +85,7 @@ export class DrawManager {
                 nickname: chat.profile.nickname,
                 source: 'chat'
             });
-            this.notify(); // 참가자 수 갱신을 위해 알림
+            this.notify();
         }
     }
 
@@ -95,29 +107,35 @@ export class DrawManager {
         }
     }
 
-    // [핵심] 추첨 실행 (슬롯머신)
     public draw(count: number = 1) {
         const pool = Array.from(this.candidates.values());
         if (pool.length === 0) return { success: false, msg: '참가자가 없습니다.' };
 
         this.isRolling = true;
-        this.notify(); // 슬롯머신 애니메이션 시작 신호
+        this.winners = [];
+        this.notify();
 
-        // 3초 후 결과 발표
+        // 3초 애니메이션 대기
         setTimeout(() => {
             this.isRolling = false;
-            // 중복 없이 랜덤 추출
-            const shuffled = pool.sort(() => 0.5 - Math.random());
-            this.winners = shuffled.slice(0, count);
+            // 피셔-예이츠 셔플로 공정성 확보
+            const shuffled = [...pool];
+            for (let i = shuffled.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+            }
             
+            this.winners = shuffled.slice(0, Math.min(count, shuffled.length));
             this.notify();
-            if (this.bot.chat) {
+
+            // 당첨 공지 (안전한 호출)
+            if (this.winners.length > 0 && this.bot.chat && this.bot.chat.connected) {
                 const names = this.winners.map(w => w.nickname).join(', ');
-                this.bot.chat.sendChat(`🎉 축하합니다! 당첨자: [ ${names} ]`);
+                this.bot.chat.sendChat(`🎉 [추첨 완료] 당첨자: [ ${names} ] 축하드립니다!`);
             }
         }, 3000);
 
-        return { success: true, winners: [] }; // 결과는 비동기로 처리됨
+        return { success: true };
     }
 
     public reset() {
@@ -130,8 +148,7 @@ export class DrawManager {
     public getState() {
         return {
             candidatesCount: this.candidates.size,
-            // 보안상 전체 명단 대신 카운트만 보내거나, 필요시 명단 전송
-            candidates: Array.from(this.candidates.values()).slice(-10), // 최근 10명만 미리보기
+            candidates: Array.from(this.candidates.values()).slice(-10),
             settings: this.settings,
             isRolling: this.isRolling,
             winners: this.winners

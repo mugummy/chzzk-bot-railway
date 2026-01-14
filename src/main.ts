@@ -102,29 +102,23 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
-                
-                // [투표 제어]
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
                 
-                // [추첨 제어 - 투표자 연동 포함]
                 case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
                 case 'executeDraw': 
-                    // [핵심] 투표자 중에서 추첨하는 경우 처리
+                    // [핵심] 투표자 추첨 시 안전한 데이터 주입
                     if (data.payload.fromVote) {
                         const voters = bot.votes.getVoters();
-                        if (voters.length === 0) return;
-                        // DrawManager의 후보군을 투표자로 강제 교체
-                        (bot.draw as any).candidates.clear();
-                        voters.forEach(v => (bot.draw as any).candidates.set(v.userIdHash, { userIdHash: v.userIdHash, nickname: v.nickname, source: 'vote' }));
+                        if (voters.length > 0) bot.draw.injectCandidatesFromVote(voters);
                     }
                     bot.draw.draw(data.payload.count); 
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
 
-                // [나머지 생략 없는 핸들러들]
+                // [나머지 필수 로직 유지]
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
