@@ -1,5 +1,6 @@
 import { ChatEvent, ChzzkChat } from 'chzzk';
 import { BotInstance } from './BotInstance';
+import { VariableProcessor } from './VariableProcessor';
 
 export interface GreetSettings {
     enabled: boolean;
@@ -7,16 +8,14 @@ export interface GreetSettings {
     message: string;
 }
 
-/**
- * GreetManager: 시청자의 방문을 감지하여 자동 인사를 건넵니다.
- * 방문 기록은 채널별로 독립적으로 관리됩니다.
- */
 export class GreetManager {
     private settings: GreetSettings = { enabled: true, type: 1, message: "반갑습니다! 방송에 오신 것을 환영합니다." };
-    private history: { [userIdHash: string]: string } = {}; // userId -> lastGreetDate (YYYY-MM-DD)
+    private history: { [userIdHash: string]: string } = {}; 
     private onStateChangeCallback: () => void = () => {};
+    private variableProcessor: VariableProcessor; // [추가] 변수 처리기
 
     constructor(private bot: BotInstance, initialData?: any) {
+        this.variableProcessor = new VariableProcessor(bot); // [추가] 초기화
         if (initialData) {
             this.settings = initialData.settings || this.settings;
             this.history = initialData.history || {};
@@ -29,27 +28,19 @@ export class GreetManager {
 
     private notify() {
         this.onStateChangeCallback();
+        this.bot.saveAll();
     }
 
-    /**
-     * 설정 업데이트 (대시보드 요청)
-     */
     public updateSettings(newSettings: Partial<GreetSettings>) {
         this.settings = { ...this.settings, ...newSettings };
         this.notify();
     }
 
-    /**
-     * 방문 기록 초기화
-     */
     public clearHistory() {
         this.history = {};
         this.notify();
     }
 
-    /**
-     * 채팅 수신 시 인사 대상인지 판별 후 인사 실행
-     */
     public async handleChat(chat: ChatEvent, chzzkChat: ChzzkChat) {
         if (!this.settings.enabled) return;
 
@@ -60,38 +51,25 @@ export class GreetManager {
         let shouldGreet = false;
 
         if (this.settings.type === 1) {
-            // 최초 1회 모드: 기록이 아예 없는 경우에만
             if (!lastGreeted) shouldGreet = true;
         } else {
-            // 매일마다 모드: 오늘 날짜의 기록이 없는 경우에만
             if (lastGreeted !== today) shouldGreet = true;
         }
 
         if (shouldGreet) {
             this.history[userId] = today;
             
-            // 변수 치환 ({user} -> 닉네임)
-            const msg = this.settings.message.replace(/{user}/g, chat.profile.nickname);
+            // [수정] 단순 replace가 아닌 VariableProcessor를 통해 함수 처리
             try {
-                await chzzkChat.sendChat(msg);
+                const processedMsg = await this.variableProcessor.process(this.settings.message, { chat });
+                await chzzkChat.sendChat(processedMsg);
                 this.notify();
             } catch (err) {
-                console.error('[GreetManager] Failed to send greet:', err);
+                console.error('[GreetManager] Error:', err);
             }
         }
     }
 
-    public getState() {
-        return {
-            settings: this.settings,
-            historyCount: Object.keys(this.history).length
-        };
-    }
-
-    public getData() {
-        return {
-            settings: this.settings,
-            history: this.history
-        };
-    }
+    public getState() { return { settings: this.settings, historyCount: Object.keys(this.history).length }; }
+    public getData() { return { settings: this.settings, history: this.history }; }
 }
