@@ -102,23 +102,28 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
+                
+                // Vote
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
-                
-                case 'startDraw': bot.draw.startSession(data.payload.keyword, data.payload.settings); break;
+                case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break; // [신규]
+
+                // Draw
+                case 'startDraw': bot.draw.startSession(data.payload.settings); break;
+                case 'stopDraw': bot.draw.endSession(); break;
                 case 'executeDraw': 
-                    // [핵심] 투표자 추첨 시 안전한 데이터 주입
+                    // [핵심] 투표자 추첨 시 voteId가 있으면 기록에서, 없으면 현재 투표에서 가져옴
                     if (data.payload.fromVote) {
-                        const voters = bot.votes.getVoters();
+                        const voters = bot.votes.getVoters(data.payload.voteId);
                         if (voters.length > 0) bot.draw.injectCandidatesFromVote(voters);
                     }
                     bot.draw.draw(data.payload.count); 
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
 
-                // [나머지 필수 로직 유지]
+                // Others
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
