@@ -1,3 +1,11 @@
+export interface OverlayConfig {
+    backgroundColor: string;
+    textColor: string;
+    accentColor: string;
+    opacity: number;
+    scale: number;
+}
+
 export interface BotSettings {
     chatEnabled: boolean;
     songRequestMode: 'all' | 'cooldown' | 'donation' | 'off';
@@ -8,33 +16,40 @@ export interface BotSettings {
     pointsName: string;
     participationCommand: string;
     maxParticipants: number;
+    overlay: OverlayConfig; // [추가]
 }
 
 export const defaultSettings: BotSettings = {
     chatEnabled: true,
     songRequestMode: 'all',
     songRequestCooldown: 30,
-    minDonationAmount: 0,
-    pointsPerChat: 1,
+    minDonationAmount: 1000,
+    pointsPerChat: 10,
     pointsCooldown: 60,
     pointsName: '포인트',
     participationCommand: '!시참',
-    maxParticipants: 10
+    maxParticipants: 10,
+    overlay: {
+        backgroundColor: '#000000',
+        textColor: '#ffffff',
+        accentColor: '#10b981', // emerald-500
+        opacity: 0.9,
+        scale: 1.0
+    }
 };
 
 export class SettingsManager {
     private settings: BotSettings;
     private onStateChangeCallback: () => void = () => {};
-    private onChatEnabledChangeCallback: (enabled: boolean) => void = () => {};
+    private onChatEnabledCallback: (enabled: boolean) => void = () => {};
 
-    constructor(initialSettings?: Partial<BotSettings>) {
-        // [핵심] DB 값이 있으면 그것을 우선 사용 (깊은 병합)
-        this.settings = { ...defaultSettings, ...initialSettings };
-        
-        // participationCommand가 비어있다면 기본값 보장
-        if (!this.settings.participationCommand) {
-            this.settings.participationCommand = '!시참';
-        }
+    constructor(initialSettings?: any) {
+        // 깊은 병합으로 누락된 설정 보완
+        this.settings = { 
+            ...defaultSettings, 
+            ...initialSettings,
+            overlay: { ...defaultSettings.overlay, ...(initialSettings?.overlay || {}) }
+        };
     }
 
     public setOnStateChangeListener(callback: () => void) {
@@ -42,25 +57,27 @@ export class SettingsManager {
     }
 
     public setOnChatEnabledChange(callback: (enabled: boolean) => void) {
-        this.onChatEnabledChangeCallback = callback;
-    }
-
-    private notify() {
-        this.onStateChangeCallback();
-    }
-
-    public getSettings(): BotSettings {
-        return this.settings;
+        this.onChatEnabledCallback = callback;
     }
 
     public updateSettings(newSettings: Partial<BotSettings>) {
-        const prevChatEnabled = this.settings.chatEnabled;
-        this.settings = { ...this.settings, ...newSettings };
+        const oldChatEnabled = this.settings.chatEnabled;
         
-        if (newSettings.chatEnabled !== undefined && newSettings.chatEnabled !== prevChatEnabled) {
-            this.onChatEnabledChangeCallback(newSettings.chatEnabled);
-        }
+        // 오버레이 설정 등 깊은 병합 처리
+        this.settings = {
+            ...this.settings,
+            ...newSettings,
+            overlay: { ...this.settings.overlay, ...(newSettings.overlay || {}) }
+        };
 
-        this.notify();
+        this.onStateChangeCallback();
+
+        if (newSettings.chatEnabled !== undefined && newSettings.chatEnabled !== oldChatEnabled) {
+            this.onChatEnabledCallback(newSettings.chatEnabled);
+        }
+    }
+
+    public getSettings() {
+        return this.settings;
     }
 }
