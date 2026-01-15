@@ -22,8 +22,7 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-// [변경] 버전 명시하여 강제 업데이트 (v5.0 Final Fix)
-botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v5.0 Final Fix - Notify Payload Enforced)'));
+botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v6.0 Logging)'));
 
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
@@ -54,7 +53,9 @@ wss.on('connection', async (ws, req) => {
     const clients = channelClientsMap.get(channelId)!;
     clients.add(ws);
 
+    // [로그 추가] 브로드캐스트 시 타입 출력
     const broadcast = (type: string, payload: any) => {
+        console.log(`[WebSocket] 🛰 Broadcast: ${type} to ${clients.size} clients`);
         const msg = JSON.stringify({ type, payload });
         clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
@@ -87,7 +88,6 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
-                // [중요] 상태 변경 리스너 재등록
                 bot.setOnStateChangeListener((type, payload) => { 
                     bot?.saveAll(); 
                     broadcast(type, payload); 
@@ -109,14 +109,12 @@ wss.on('connection', async (ws, req) => {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 
-                // [투표]
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
                 case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break;
                 
-                // [추첨]
                 case 'startDraw': bot.draw.startSession(data.payload.settings); break;
                 case 'stopDraw': bot.draw.endSession(); break;
                 case 'executeDraw': 
@@ -128,12 +126,10 @@ wss.on('connection', async (ws, req) => {
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
 
-                // [룰렛]
                 case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
                 case 'spinRoulette': bot.roulette.spin(); break;
                 case 'resetRoulette': bot.roulette.reset(); break;
 
-                // [나머지]
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;

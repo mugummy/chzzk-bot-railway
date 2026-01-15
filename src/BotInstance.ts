@@ -42,7 +42,12 @@ export class BotInstance {
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) { this.onStateChangeCallback = callback; }
     public setOnChatListener(callback: (chat: ChatEvent) => void) { this.onChatCallback = callback; }
-    private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
+
+    // [로그 추가] 매니저로부터 신호를 받으면 로그 출력 후 상위로 전달
+    private notify(type: string, payload: any) { 
+        console.log(`[BotInstance] 📣 Sending signal: ${type}`);
+        this.onStateChangeCallback(type, payload); 
+    }
 
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
@@ -61,16 +66,13 @@ export class BotInstance {
         this.greet = new GreetManager(this as any, data.greetData);
         this.greet.setOnStateChangeListener(() => this.notify('greetStateUpdate', this.greet.getState()));
         
-        // 투표 매니저 설정 (콜백 수정됨)
         this.votes = new VoteManager(this as any);
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
         this.votes.setOnStateChangeListener((type, payload) => this.notify(type, payload));
 
-        // 추첨 매니저 설정 (콜백 수정됨)
         this.draw = new DrawManager(this as any, data.draw);
         this.draw.setOnStateChangeListener((type, payload) => this.notify(type, payload));
 
-        // 룰렛 매니저 설정 (콜백 수정됨)
         this.roulette = new RouletteManager(this as any, data.roulette?.items || []);
         this.roulette.setOnStateChangeListener((type, payload) => this.notify(type, payload));
 
@@ -83,6 +85,7 @@ export class BotInstance {
             if (this.liveDetail?.chatChannelId) {
                 this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
                 this.chat.on('chat', (chat) => this.handleChat(chat));
+                this.chat.on('donation', (donation) => this.handleDonation(donation));
                 this.chat.on('connect', async () => {
                     const self = await this.chat?.selfProfile();
                     this.botUserIdHash = self?.userIdHash || null;
