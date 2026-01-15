@@ -22,8 +22,8 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-// [변경] 버전 로그 추가하여 강제 배포 유도
-botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v3.0 Final)'));
+// [변경] 강제 재배포 트리거 (v4.0 Real Final)
+botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v4.0 Real Final)'));
 
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
@@ -103,6 +103,7 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
+                
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
@@ -119,6 +120,10 @@ wss.on('connection', async (ws, req) => {
                     bot.draw.draw(data.payload.count); 
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
+
+                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
+                case 'spinRoulette': bot.roulette.spin(); break;
+                case 'resetRoulette': bot.roulette.reset(); break;
 
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
@@ -140,9 +145,6 @@ wss.on('connection', async (ws, req) => {
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
                     if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
                     break;
-                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
-                case 'spinRoulette': bot.roulette.spin(); break;
-                case 'resetRoulette': bot.roulette.reset(); break;
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;

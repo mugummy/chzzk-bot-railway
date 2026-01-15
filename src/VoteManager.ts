@@ -28,17 +28,17 @@ export interface VoteSession {
 
 export class VoteManager {
     private currentVote: VoteSession | null = null;
-    private voteHistory: VoteSession[] = []; // [신규] 투표 기록 저장소
-    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
+    private voteHistory: VoteSession[] = [];
+    private onStateChangeCallback: () => void = () => {};
 
     constructor(private bot: BotInstance) {}
 
-    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
+    public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
     }
 
     private notify() {
-        this.onStateChangeCallback('voteStateUpdate', this.getState());
+        this.onStateChangeCallback();
         this.bot.saveAll();
     }
 
@@ -61,7 +61,7 @@ export class VoteManager {
             totalVotes: 0,
             voters: []
         };
-        this.notify();
+        this.notify(); // 즉시 알림
     }
 
     public startVote() {
@@ -69,7 +69,7 @@ export class VoteManager {
             this.currentVote.isActive = true;
             this.currentVote.startTime = Date.now();
             this.notify();
-            if (this.bot.chat) {
+            if (this.bot.chat && this.bot.chat.connected) {
                 const opts = this.currentVote.options.map((o, i) => `${i+1}. ${o.text}`).join(' / ');
                 this.bot.chat.sendChat(`📊 투표 시작: ${this.currentVote.question} [ ${opts} ]`);
             }
@@ -81,7 +81,7 @@ export class VoteManager {
             this.currentVote.isActive = false;
             this.currentVote.endTime = Date.now();
             
-            // DB 로그 저장
+            // DB 저장
             if (this.currentVote.voters.length > 0) {
                 try {
                     const payload = this.currentVote.voters.map(v => ({
@@ -92,18 +92,18 @@ export class VoteManager {
                         option_id: v.optionId
                     }));
                     await supabase.from('vote_logs').insert(payload);
-                } catch (e) {
-                    console.error('[VoteManager] Log Save Error:', e);
-                }
+                } catch (e) {}
             }
 
-            // [신규] 기록으로 이동
+            // 기록 이동
             this.voteHistory.unshift({ ...this.currentVote });
-            if (this.voteHistory.length > 50) this.voteHistory.pop(); // 최대 50개 유지
+            if (this.voteHistory.length > 50) this.voteHistory.pop();
             
-            if (this.bot.chat) this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표가 집계되었습니다.`);
+            if (this.bot.chat && this.bot.chat.connected) {
+                this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표`);
+            }
             
-            this.currentVote = null; // 현재 투표 초기화
+            this.currentVote = null;
             this.notify();
         }
     }
@@ -113,7 +113,6 @@ export class VoteManager {
         this.notify();
     }
 
-    // [신규] 기록 삭제
     public deleteHistory(voteId: string) {
         this.voteHistory = this.voteHistory.filter(v => v.id !== voteId);
         this.notify();
@@ -126,7 +125,6 @@ export class VoteManager {
         
         if (!isNaN(optionIndex) && this.currentVote.options[optionIndex]) {
             const userId = chat.profile.userIdHash;
-            // 중복 투표 체크
             if (!this.currentVote.voters.some(v => v.userIdHash === userId)) {
                 const optionId = this.currentVote.options[optionIndex].id;
                 this.currentVote.results[optionId]++;
@@ -150,7 +148,6 @@ export class VoteManager {
         }; 
     }
     
-    // 추첨을 위해 특정 투표(현재 또는 기록)의 참가자 명단 반환
     public getVoters(voteId?: string) {
         if (!voteId && this.currentVote) return this.currentVote.voters;
         if (voteId) {

@@ -8,7 +8,9 @@ export class RouletteManager {
         this.items = initialData || [];
     }
 
-    public setOnStateChangeListener(callback: () => void) { this.onStateChangeCallback = callback; }
+    public setOnStateChangeListener(callback: () => void) {
+        this.onStateChangeCallback = callback;
+    }
 
     private notify() {
         this.onStateChangeCallback();
@@ -19,7 +21,7 @@ export class RouletteManager {
         this.items = items;
         this.winner = null;
         this.isSpinning = false;
-        // [핵심] 생성 즉시 알림
+        // [중요] 생성 즉시 알림
         this.notify();
     }
 
@@ -41,7 +43,9 @@ export class RouletteManager {
             this.isSpinning = false;
             this.winner = selected;
             this.notify();
-            if (this.bot.chat?.connected) this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selected.text} ] 당첨!`);
+            if (this.bot.chat?.connected) {
+                this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selected.text} ] 당첨!`);
+            }
         }, 3000);
     }
 
@@ -52,5 +56,11 @@ export class RouletteManager {
         this.notify();
     }
 
-    public getState() { return { items: this.items, isSpinning: this.isSpinning, winner: this.winner }; }
+    public getState() { 
+        return { 
+            items: this.items, 
+            isSpinning: this.isSpinning, 
+            winner: this.winner 
+        }; 
+    }
 }
