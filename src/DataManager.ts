@@ -25,11 +25,6 @@ export class DataManager {
             greetData: { settings: db.greet_settings || { enabled: true, type: 1, message: "반갑습니다!" }, history: db.greet_history || {} },
             songQueue: db.song_queue || [],
             currentSong: db.current_song || null,
-            // [중요] 투표/기록/룰렛/추첨 복구
-            votes: db.current_vote ? [db.current_vote] : [],
-            voteHistory: db.vote_history || [],
-            roulette: db.roulette_state || { items: [], isSpinning: false, winner: null },
-            draw: db.draw_state || { isActive: false, candidates: [], settings: {} },
             participants: db.participation_data || { queue: [], active: [], isActive: false, max: 10 },
             commands: (cmds.data || []).map(c => ({ id: c.id, triggers: c.triggers || [c.trigger], response: c.response, enabled: c.enabled })),
             macros: (macs.data || []).map(m => ({ id: m.id, title: m.title, message: m.message, interval: m.interval_minutes, enabled: m.enabled })),
@@ -57,11 +52,6 @@ export class DataManager {
                 greet_history: data.greetData.history,
                 song_queue: data.songQueue,
                 current_song: data.currentSong,
-                current_vote: data.votes?.[0] || null,
-                // [중요] 상태 및 기록 저장
-                vote_history: data.voteHistory,
-                roulette_state: data.roulette,
-                draw_state: data.draw,
                 participation_data: data.participants,
                 updated_at: new Date().toISOString()
             }).eq('channel_id', channelId);
@@ -72,7 +62,7 @@ export class DataManager {
                 this.syncTable(channelId, 'counters', data.counters.map((i: any) => ({ channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay }))),
                 this.syncPoints(channelId, data.points)
             ]);
-        } catch (e) { console.error(`[DataManager] Save Error:`, e); }
+        } catch (e) {}
     }
 
     private static async syncTable(channelId: string, table: string, rows: any[]) {
@@ -87,5 +77,10 @@ export class DataManager {
         await supabase.from('points').upsert(payload, { onConflict: 'channel_id,user_id_hash' });
     }
 
-    private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], currentSong: null, votes: [], voteHistory: [], roulette: { items: [], winner: null }, draw: { isActive: false, candidates: [] }, participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
+    static async loadParticipationHistory(channelId: string) {
+        const { data } = await supabase.from('participation_history').select('nickname, count').eq('channel_id', channelId).order('count', { ascending: false }).limit(10);
+        return data || [];
+    }
+
+    private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], currentSong: null, participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
 }

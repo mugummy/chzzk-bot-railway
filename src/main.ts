@@ -22,7 +22,7 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v6.0 Logging)'));
+botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (Features Removed)'));
 
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
@@ -53,9 +53,7 @@ wss.on('connection', async (ws, req) => {
     const clients = channelClientsMap.get(channelId)!;
     clients.add(ws);
 
-    // [로그 추가] 브로드캐스트 시 타입 출력
     const broadcast = (type: string, payload: any) => {
-        console.log(`[WebSocket] 🛰 Broadcast: ${type} to ${clients.size} clients`);
         const msg = JSON.stringify({ type, payload });
         clients.forEach(c => { if (c.readyState === WebSocket.OPEN) c.send(msg); });
     };
@@ -69,9 +67,6 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
         ws.send(JSON.stringify({ type: 'macrosUpdate', payload: bot.macros.getMacros() }));
         ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
-        ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.votes.getState() }));
-        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
-        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
         ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
         ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
         ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: channelChatHistory.get(channelId) || [] }));
@@ -88,11 +83,7 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
-                bot.setOnStateChangeListener((type, payload) => { 
-                    bot?.saveAll(); 
-                    broadcast(type, payload); 
-                });
-                
+                bot.setOnStateChangeListener((type, payload) => { bot?.saveAll(); broadcast(type, payload); });
                 bot.setOnChatListener((chat) => {
                     const history = channelChatHistory.get(channelId) || [];
                     history.push(chat); if (history.length > 100) history.shift();
@@ -109,27 +100,6 @@ wss.on('connection', async (ws, req) => {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 
-                case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
-                case 'startVote': bot.votes.startVote(); break;
-                case 'endVote': await bot.votes.endVote(); break;
-                case 'resetVote': bot.votes.resetVote(); break;
-                case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break;
-                
-                case 'startDraw': bot.draw.startSession(data.payload.settings); break;
-                case 'stopDraw': bot.draw.endSession(); break;
-                case 'executeDraw': 
-                    if (data.payload.fromVote) {
-                        const voters = bot.votes.getVoters(data.payload.voteId);
-                        if (voters.length > 0) bot.draw.injectCandidatesFromVote(voters);
-                    }
-                    bot.draw.draw(data.payload.count); 
-                    break;
-                case 'resetDraw': bot.draw.reset(); break;
-
-                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
-                case 'spinRoulette': bot.roulette.spin(); break;
-                case 'resetRoulette': bot.roulette.reset(); break;
-
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;

@@ -1,7 +1,6 @@
 import { ChzzkClient, ChzzkChat, ChatEvent, DonationEvent, LiveDetail, Channel } from 'chzzk';
 import { CommandManager } from './CommandManager';
 import { SongManager } from './SongManager';
-import { VoteManager } from './VoteManager';
 import { DataManager } from './DataManager';
 import { PointManager } from './PointManager';
 import { GreetManager } from './GreetManager';
@@ -9,8 +8,6 @@ import { SettingsManager } from './SettingsManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
 import { ParticipationManager } from './ParticipationManager';
-import { DrawManager } from './DrawManager';
-import { RouletteManager } from './RouletteManager';
 
 export class BotInstance {
     private client: ChzzkClient;
@@ -23,15 +20,12 @@ export class BotInstance {
 
     public commands!: CommandManager;
     public songs!: SongManager;
-    public votes!: VoteManager;
     public points!: PointManager;
     public greet!: GreetManager;
     public settings!: SettingsManager;
     public counters!: CounterManager;
     public macros!: MacroManager;
     public participation!: ParticipationManager;
-    public draw!: DrawManager;
-    public roulette!: RouletteManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
     private onChatCallback: (chat: ChatEvent) => void = () => {};
@@ -42,12 +36,7 @@ export class BotInstance {
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) { this.onStateChangeCallback = callback; }
     public setOnChatListener(callback: (chat: ChatEvent) => void) { this.onChatCallback = callback; }
-
-    // [로그 추가] 매니저로부터 신호를 받으면 로그 출력 후 상위로 전달
-    private notify(type: string, payload: any) { 
-        console.log(`[BotInstance] 📣 Sending signal: ${type}`);
-        this.onStateChangeCallback(type, payload); 
-    }
+    private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
 
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
@@ -65,17 +54,6 @@ export class BotInstance {
         this.points.setOnStateChangeListener(() => this.notify('pointsUpdate', this.points.getPointsData()));
         this.greet = new GreetManager(this as any, data.greetData);
         this.greet.setOnStateChangeListener(() => this.notify('greetStateUpdate', this.greet.getState()));
-        
-        this.votes = new VoteManager(this as any);
-        if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
-        this.votes.setOnStateChangeListener((type, payload) => this.notify(type, payload));
-
-        this.draw = new DrawManager(this as any, data.draw);
-        this.draw.setOnStateChangeListener((type, payload) => this.notify(type, payload));
-
-        this.roulette = new RouletteManager(this as any, data.roulette?.items || []);
-        this.roulette.setOnStateChangeListener((type, payload) => this.notify(type, payload));
-
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
@@ -85,7 +63,6 @@ export class BotInstance {
             if (this.liveDetail?.chatChannelId) {
                 this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
                 this.chat.on('chat', (chat) => this.handleChat(chat));
-                this.chat.on('donation', (donation) => this.handleDonation(donation));
                 this.chat.on('connect', async () => {
                     const self = await this.chat?.selfProfile();
                     this.botUserIdHash = self?.userIdHash || null;
@@ -98,12 +75,12 @@ export class BotInstance {
     }
 
     public async refreshLiveInfo() { try { this.channel = await this.client.channel(this.channelId); this.liveDetail = await this.client.live.detail(this.channelId); } catch (e) {} }
+    
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
         this.points.awardPoints(chat, this.settings.getSettings());
-        await this.votes.handleChat(chat);
-        this.draw.handleChat(chat);
+        
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
@@ -122,7 +99,6 @@ export class BotInstance {
     public getChannelId() { return this.channelId; }
 
     public async saveAll() { 
-        const voteState = this.votes.getState();
         await DataManager.saveData(this.channelId, { 
             settings: this.settings.getSettings(), 
             commands: this.commands.getCommands(), 
@@ -132,11 +108,7 @@ export class BotInstance {
             songQueue: this.songs.getData().songQueue, 
             currentSong: this.songs.getData().currentSong, 
             greetData: this.greet.getData(), 
-            votes: [voteState.currentVote], 
-            voteHistory: voteState.history,
-            participants: this.participation.getState(),
-            draw: this.draw.getState(),
-            roulette: this.roulette.getState()
+            participants: this.participation.getState()
         }); 
     }
 
