@@ -10,9 +10,6 @@ import { ParticipationManager } from './ParticipationManager';
 import { SongManager } from './SongManager';
 import { PointManager } from './PointManager';
 import { SettingsManager, BotSettings, defaultSettings } from './SettingsManager';
-import { VoteManager } from './VoteManager';
-import { DrawManager } from './DrawManager';
-import { RouletteManager } from './RouletteManager';
 import { GreetManager } from './GreetManager';
 
 type StateListener = () => void;
@@ -28,9 +25,6 @@ export class ChatBot {
     public songManager!: SongManager;
     public pointManager!: PointManager;
     public settingsManager!: SettingsManager;
-    public voteManager!: VoteManager;
-    public drawManager!: DrawManager;
-    public rouletteManager!: RouletteManager;
     public greetManager!: GreetManager;
     
     public settings: BotSettings = defaultSettings;
@@ -61,23 +55,11 @@ export class ChatBot {
         this.participationManager = new ParticipationManager(this, data.participants);
         this.songManager = new SongManager(this, data);
         this.pointManager = new PointManager(data.points);
-        
-        // VoteManager 초기화 (데이터 로드 포함)
-        this.voteManager = new VoteManager(this);
-        if (data.votes && data.votes.length > 0) {
-            this.voteManager.setCurrentVote(data.votes[0]);
-        }
-
-        this.drawManager = new DrawManager(this, []);
-        this.rouletteManager = new RouletteManager(this, []);
         this.greetManager = new GreetManager(this, data.greetData);
 
         // Wiring Listeners
         this.participationManager.setOnStateChangeListener(() => this.notifyStateChange('participation'));
         this.songManager.setOnStateChangeListener(() => this.notifyStateChange('song'));
-        this.voteManager.setOnStateChangeListener(() => this.notifyStateChange('vote'));
-        this.drawManager.setOnStateChangeListener(() => this.notifyStateChange('draw'));
-        this.rouletteManager.setOnStateChangeListener(() => this.notifyStateChange('roulette'));
         this.pointManager.setOnStateChangeListener(() => this.notifyStateChange('points'));
         this.commandManager.setOnStateChangeListener(() => this.notifyStateChange('commands'));
         this.macroManager.setOnStateChangeListener(() => this.notifyStateChange('macros'));
@@ -98,7 +80,6 @@ export class ChatBot {
             macros: this.macroManager.getMacros(),
             points: this.pointManager.getPointsData(),
             settings: this.settings,
-            votes: this.voteManager.getState().currentVote ? [this.voteManager.getState().currentVote] : [],
             participants: this.participationManager.getState(),
             overlaySettings: this.overlaySettings,
             greetData: this.greetManager.getData()
@@ -138,8 +119,6 @@ export class ChatBot {
                 if (!this.settings.chatEnabled) return;
                 await this.greetManager.handleChat(chat, this.chat!);
                 this.pointManager.awardPoints(chat, this.settings);
-                this.drawManager.handleChat(chat);
-                await this.voteManager.handleChat(chat);
 
                 const msg = chat.message.trim();
                 if (msg.startsWith('!')) {
@@ -153,7 +132,6 @@ export class ChatBot {
             });
 
             this.chat.on('donation', async (donation: DonationEvent) => {
-                await this.voteManager.handleDonation(donation);
                 const youtubeUrlRegex = /(?:https?:\/\/)?[^\s]*youtu(?:be\.com\/watch\?v=|\.be\/)([a-zA-Z0-9_-]{11})(?:\S+)?/;
                 const match = donation.message?.match(youtubeUrlRegex);
                 if (match && match[0]) {

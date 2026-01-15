@@ -1,5 +1,6 @@
 import { supabase } from "./supabase";
 import { defaultSettings } from "./SettingsManager";
+import { DonationEvent } from "chzzk";
 
 export class DataManager {
     private static saveQueue: Map<string, any> = new Map();
@@ -80,6 +81,21 @@ export class DataManager {
     static async loadParticipationHistory(channelId: string) {
         const { data } = await supabase.from('participation_history').select('nickname, count').eq('channel_id', channelId).order('count', { ascending: false }).limit(10);
         return data || [];
+    }
+    
+    // [New] 후원 로그 저장
+    static async logDonation(channelId: string, donation: DonationEvent) {
+        try {
+            await supabase.from('donation_logs').insert({
+                channel_id: channelId,
+                user_id_hash: donation.profile?.userIdHash || 'unknown',
+                nickname: donation.profile?.nickname || '익명',
+                amount: donation.payAmount || 0,
+                message: donation.message || ''
+            });
+        } catch (e) {
+            console.error('[DataManager] Failed to log donation:', e);
+        }
     }
 
     private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], currentSong: null, participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }

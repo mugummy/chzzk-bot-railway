@@ -8,6 +8,10 @@ import { SettingsManager } from './SettingsManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
 import { ParticipationManager } from './ParticipationManager';
+import { VoteManager } from './VoteManager';
+import { DrawManager } from './DrawManager';
+import { RouletteManager } from './RouletteManager';
+import { OverlayManager } from './OverlayManager';
 
 export class BotInstance {
     private client: ChzzkClient;
@@ -17,6 +21,7 @@ export class BotInstance {
     private livePollingTimer: NodeJS.Timeout | null = null;
     public liveDetail: LiveDetail | null = null;
     public channel: Channel | null = null;
+    private wsBroadcastCallback: (type: string, payload: any) => void = () => {};
 
     public commands!: CommandManager;
     public songs!: SongManager;
@@ -26,6 +31,10 @@ export class BotInstance {
     public counters!: CounterManager;
     public macros!: MacroManager;
     public participation!: ParticipationManager;
+    public vote!: VoteManager;
+    public draw!: DrawManager;
+    public roulette!: RouletteManager;
+    public overlayManager!: OverlayManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
     private onChatCallback: (chat: ChatEvent) => void = () => {};
@@ -36,6 +45,12 @@ export class BotInstance {
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) { this.onStateChangeCallback = callback; }
     public setOnChatListener(callback: (chat: ChatEvent) => void) { this.onChatCallback = callback; }
+    public setBroadcastCallback(callback: (type: string, payload: any) => void) { this.wsBroadcastCallback = callback; }
+    
+    public broadcast(type: string, payload: any) {
+        this.wsBroadcastCallback(type, payload);
+    }
+
     private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
 
     public async setup() {
@@ -57,12 +72,22 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
+        // [New Features]
+        this.overlayManager = new OverlayManager(this);
+        this.vote = new VoteManager(this);
+        this.vote.setOnStateChangeListener((t, p) => this.notify(t, p));
+        this.draw = new DrawManager(this);
+        this.draw.setOnStateChangeListener((t, p) => this.notify(t, p));
+        this.roulette = new RouletteManager(this);
+        this.roulette.setOnStateChangeListener((t, p) => this.notify(t, p));
+
         try {
             await this.refreshLiveInfo();
             this.livePollingTimer = setInterval(() => this.refreshLiveInfo(), 30000);
             if (this.liveDetail?.chatChannelId) {
                 this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
                 this.chat.on('chat', (chat) => this.handleChat(chat));
+                this.chat.on('donation', (donation) => this.handleDonation(donation));
                 this.chat.on('connect', async () => {
                     const self = await this.chat?.selfProfile();
                     this.botUserIdHash = self?.userIdHash || null;
@@ -81,6 +106,10 @@ export class BotInstance {
         this.onChatCallback(chat);
         this.points.awardPoints(chat, this.settings.getSettings());
         
+        // 투표 및 추첨 채팅 핸들링
+        this.vote.handleChat(chat);
+        this.draw.handleChat(chat);
+
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
@@ -92,6 +121,14 @@ export class BotInstance {
             if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
             else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
         }
+    }
+
+    private async handleDonation(donation: DonationEvent) {
+        this.songs.addSongFromDonation(donation, donation.message || '', this.settings.getSettings());
+        this.vote.handleDonation(donation);
+        // 추첨용 후원 로그 저장 (DataManager 혹은 직접 Supabase)
+        // 여기서는 간단히 로그만 남김, 실제로는 DrawManager에서 읽어감
+        await DataManager.logDonation(this.channelId, donation);
     }
 
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "", followerCount: this.channel?.followerCount || 0 }; }

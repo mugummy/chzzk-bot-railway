@@ -69,6 +69,13 @@ wss.on('connection', async (ws, req) => {
         ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
         ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
         ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
+        
+        // [New Features State]
+        ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.vote.getState() }));
+        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
+        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
+        ws.send(JSON.stringify({ type: 'overlayStateUpdate', payload: bot.overlayManager.getState() }));
+
         ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: channelChatHistory.get(channelId) || [] }));
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
@@ -83,6 +90,10 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
+                
+                // BotInstance가 broadcast를 직접 할 수 있도록 콜백 연결
+                bot.setBroadcastCallback(broadcast);
+
                 bot.setOnStateChangeListener((type, payload) => { bot?.saveAll(); broadcast(type, payload); });
                 bot.setOnChatListener((chat) => {
                     const history = channelChatHistory.get(channelId) || [];
@@ -133,6 +144,20 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'playNext') bot.songs.playNext();
                     if (data.action === 'remove') bot.songs.removeSong(data.index);
                     break;
+                
+                // [New Feature Handlers]
+                case 'createVote': await bot.vote.createVote(data.title, data.options, data.mode); break;
+                case 'startVote': await bot.vote.startVote(); break;
+                case 'endVote': await bot.vote.endVote(); break;
+                
+                case 'startDraw': bot.draw.startDraw(data.settings); break;
+                case 'pickWinners': await bot.draw.pickWinners(); break;
+                
+                case 'updateRoulette': bot.roulette.updateItems(data.items); break;
+                case 'spinRoulette': bot.roulette.spin(); break;
+                
+                case 'toggleOverlay': bot.overlayManager.setVisible(data.visible); break;
+                case 'setOverlayView': bot.overlayManager.setView(data.view); break;
             }
         } catch (err) { console.error('[WS] System Error:', err); }
     });

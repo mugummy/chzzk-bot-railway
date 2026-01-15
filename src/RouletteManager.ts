@@ -1,67 +1,54 @@
+import { BotInstance } from './BotInstance';
+import { supabase } from './supabase';
+
+export interface RouletteItem {
+    id: string;
+    label: string;
+    weight: number;
+    color: string;
+}
+
 export class RouletteManager {
-    private items: any[] = [];
-    private isSpinning: boolean = false;
-    private winner: any = null;
-    // [수정] 콜백 시그니처 변경
+    private items: RouletteItem[] = [];
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(private bot: any, initialData?: any[]) {
-        this.items = initialData || [];
-    }
+    constructor(private bot: BotInstance) {}
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
-    // [핵심 수정] 타입과 데이터 전송
     private notify() {
         this.onStateChangeCallback('rouletteStateUpdate', this.getState());
-        this.bot.saveAll();
+        this.bot.overlayManager?.updateOverlay('roulette', this.getState());
     }
 
-    public createRoulette(items: any[]) {
+    public getState() {
+        return { items: this.items };
+    }
+
+    public updateItems(items: RouletteItem[]) {
         this.items = items;
-        this.winner = null;
-        this.isSpinning = false;
         this.notify();
     }
 
     public spin() {
-        if (this.items.length === 0 || this.isSpinning) return;
-        this.isSpinning = true;
-        this.winner = null;
-        this.notify();
+        if (this.items.length === 0) return;
 
-        const totalWeight = this.items.reduce((sum, item) => sum + (item.weight || 1), 0);
+        // 가중치 기반 랜덤 선택
+        const totalWeight = this.items.reduce((sum, item) => sum + item.weight, 0);
         let random = Math.random() * totalWeight;
-        let selected = this.items[0];
+        let selectedItem = this.items[0];
+
         for (const item of this.items) {
-            random -= (item.weight || 1);
-            if (random <= 0) { selected = item; break; }
+            random -= item.weight;
+            if (random <= 0) {
+                selectedItem = item;
+                break;
+            }
         }
 
-        setTimeout(() => {
-            this.isSpinning = false;
-            this.winner = selected;
-            this.notify();
-            if (this.bot.chat?.connected) {
-                this.bot.chat.sendChat(`🎉 룰렛 결과: [ ${selected.text} ] 당첨!`);
-            }
-        }, 3000);
-    }
-
-    public reset() {
-        this.items = [];
-        this.winner = null;
-        this.isSpinning = false;
-        this.notify();
-    }
-
-    public getState() { 
-        return { 
-            items: this.items, 
-            isSpinning: this.isSpinning, 
-            winner: this.winner 
-        }; 
+        // 오버레이에 회전 명령
+        this.bot.overlayManager?.startRouletteAnimation(selectedItem);
     }
 }
