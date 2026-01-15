@@ -22,7 +22,8 @@ app.use(cors({ origin: [config.clientOrigin, "http://localhost:3000"], credentia
 app.use(express.json());
 app.use(cookieParser());
 
-botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded'));
+// [변경] 버전 로그 추가하여 강제 배포 유도
+botManager.initializeAllBots().then(() => console.log('✅ All Bots Pre-loaded (v3.0 Final)'));
 
 app.get('/api/auth/session', async (req, res) => {
     const token = req.headers.authorization?.split(' ')[1] || req.cookies?.chzzk_session;
@@ -86,12 +87,7 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
-                // [중요] 상태 변경 리스너 등록 (매니저에서 notify 호출 시 작동)
-                bot.setOnStateChangeListener((type, payload) => { 
-                    bot?.saveAll(); 
-                    broadcast(type, payload); 
-                });
-                
+                bot.setOnStateChangeListener((type, payload) => { bot?.saveAll(); broadcast(type, payload); });
                 bot.setOnChatListener((chat) => {
                     const history = channelChatHistory.get(channelId) || [];
                     history.push(chat); if (history.length > 100) history.shift();
@@ -107,15 +103,12 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
-                
-                // [투표]
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
                 case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break;
-
-                // [추첨]
+                
                 case 'startDraw': bot.draw.startSession(data.payload.settings); break;
                 case 'stopDraw': bot.draw.endSession(); break;
                 case 'executeDraw': 
@@ -127,12 +120,6 @@ wss.on('connection', async (ws, req) => {
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
 
-                // [룰렛]
-                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
-                case 'spinRoulette': bot.roulette.spin(); break;
-                case 'resetRoulette': bot.roulette.reset(); break;
-
-                // [나머지]
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
@@ -153,6 +140,9 @@ wss.on('connection', async (ws, req) => {
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
                     if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
                     break;
+                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
+                case 'spinRoulette': bot.roulette.spin(); break;
+                case 'resetRoulette': bot.roulette.reset(); break;
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;
