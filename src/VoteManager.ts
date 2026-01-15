@@ -87,9 +87,12 @@ export class VoteManager {
         // [New] 상세 채팅 알림
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             const modeText = this.currentVote.mode === 'normal' ? '일반 투표(1인 1표)' : '후원 투표(금액 비례)';
-            const optionsText = this.currentVote.options.map((o, i) => `${i+1}. ${o.label}`).join(' / ');
+            // options 배열의 각 객체에서 label을 추출해야 함
+            const optionsText = this.currentVote.options.map((o: any, i: number) => `${i+1}. ${o.label || o}`).join(' / ');
+            
             this.bot.chat.sendChat(`📢 [투표 시작] ${this.currentVote.title}`);
-            this.bot.chat.sendChat(`📌 방식: ${modeText} | 항목: ${optionsText}`);
+            this.bot.chat.sendChat(`📌 방식: ${modeText}`);
+            this.bot.chat.sendChat(`📝 항목: ${optionsText}`);
             this.bot.chat.sendChat(`👉 채팅창에 '!투표 번호'를 입력하세요! (예: !투표 1)`);
         }
         
@@ -102,13 +105,16 @@ export class VoteManager {
         this.currentVote.status = 'ended';
         await supabase.from('votes').update({ status: 'ended', ended_at: new Date().toISOString() }).eq('id', this.currentVote.id);
         
-        // [New] 상세 채팅 알림
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             this.bot.chat.sendChat(`🛑 [투표 마감] '${this.currentVote.title}' 투표가 종료되었습니다.`);
             
-            // 결과 요약
-            const topOption = this.currentVote.options.reduce((prev, current) => (prev.count > current.count) ? prev : current);
-            this.bot.chat.sendChat(`🏆 최다 득표: ${topOption.label} (${topOption.count}표)`);
+            // 결과 요약 (참여자가 있을 때만)
+            if (this.currentVote.totalParticipants > 0 && this.currentVote.options.length > 0) {
+                const topOption = this.currentVote.options.reduce((prev, current) => (prev.count > current.count) ? prev : current);
+                this.bot.chat.sendChat(`🏆 최다 득표: ${topOption.label} (${topOption.count}표)`);
+            } else {
+                this.bot.chat.sendChat(`💨 참여자가 없어 결과가 없습니다.`);
+            }
         }
 
         this.notify();
