@@ -86,7 +86,12 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
-                bot.setOnStateChangeListener((type, payload) => { bot?.saveAll(); broadcast(type, payload); });
+                // [중요] 상태 변경 리스너 등록 (매니저에서 notify 호출 시 작동)
+                bot.setOnStateChangeListener((type, payload) => { 
+                    bot?.saveAll(); 
+                    broadcast(type, payload); 
+                });
+                
                 bot.setOnChatListener((chat) => {
                     const history = channelChatHistory.get(channelId) || [];
                     history.push(chat); if (history.length > 100) history.shift();
@@ -103,18 +108,17 @@ wss.on('connection', async (ws, req) => {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
                 
-                // Vote
+                // [투표]
                 case 'createVote': bot.votes.createVote(data.data.question, data.data.options, data.data.settings); break;
                 case 'startVote': bot.votes.startVote(); break;
                 case 'endVote': await bot.votes.endVote(); break;
                 case 'resetVote': bot.votes.resetVote(); break;
-                case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break; // [신규]
+                case 'deleteVoteHistory': bot.votes.deleteHistory(data.payload.id); break;
 
-                // Draw
+                // [추첨]
                 case 'startDraw': bot.draw.startSession(data.payload.settings); break;
                 case 'stopDraw': bot.draw.endSession(); break;
                 case 'executeDraw': 
-                    // [핵심] 투표자 추첨 시 voteId가 있으면 기록에서, 없으면 현재 투표에서 가져옴
                     if (data.payload.fromVote) {
                         const voters = bot.votes.getVoters(data.payload.voteId);
                         if (voters.length > 0) bot.draw.injectCandidatesFromVote(voters);
@@ -123,7 +127,12 @@ wss.on('connection', async (ws, req) => {
                     break;
                 case 'resetDraw': bot.draw.reset(); break;
 
-                // Others
+                // [룰렛]
+                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
+                case 'spinRoulette': bot.roulette.spin(); break;
+                case 'resetRoulette': bot.roulette.reset(); break;
+
+                // [나머지]
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
@@ -144,9 +153,6 @@ wss.on('connection', async (ws, req) => {
                     const tMac = bot.macros.getMacros().find(m => m.id === data.data.id);
                     if (tMac) { tMac.enabled = data.data.enabled; bot.saveAll(); broadcast('macrosUpdate', bot.macros.getMacros()); }
                     break;
-                case 'createRoulette': bot.roulette.createRoulette(data.payload.items); break;
-                case 'spinRoulette': bot.roulette.spin(); break;
-                case 'resetRoulette': bot.roulette.reset(); break;
                 case 'toggleParticipation': bot.participation.getState().isParticipationActive ? bot.participation.stopParticipation() : bot.participation.startParticipation(); break;
                 case 'moveToParticipants': bot.participation.moveToParticipants(data.data.userIdHash); break;
                 case 'removeParticipant': bot.participation.removeUser(data.data.userIdHash); break;

@@ -9,21 +9,23 @@ export interface DrawCandidate {
 
 export class DrawManager {
     private candidates: Map<string, DrawCandidate> = new Map();
-    private settings: any = { mode: 'chat', chatType: 'command', chatCommand: '!추첨', donationType: 'all', donationAmount: 1000 };
+    // [수정] 기본값을 클라이언트와 동일하게 !참가로 통일
+    private settings: any = { mode: 'chat', chatType: 'command', chatCommand: '!참가', donationType: 'all', donationAmount: 1000 };
     private isRolling: boolean = false;
     private isActive: boolean = false;
     private winners: DrawCandidate[] = [];
-    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
+    private onStateChangeCallback: () => void = () => {};
 
     constructor(private bot: BotInstance) {}
 
-    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
+    public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
     }
 
     private notify() {
-        this.onStateChangeCallback('drawStateUpdate', this.getState());
-        this.bot.saveAll();
+        this.onStateChangeCallback();
+        // 추첨 데이터는 빈번하게 변하므로 매번 DB 저장은 하지 않음 (성능 최적화)
+        // 단, settings 변경 시에는 저장 필요 -> startSession에서 처리
     }
 
     public startSession(settings: any) {
@@ -31,6 +33,7 @@ export class DrawManager {
         this.winners = [];
         this.isActive = true;
         this.isRolling = false;
+        // [중요] 클라이언트에서 온 설정을 확실하게 적용
         this.settings = { ...this.settings, ...settings };
         this.notify();
         
@@ -68,7 +71,8 @@ export class DrawManager {
 
         let isValid = false;
         if (this.settings.chatType === 'any') isValid = true;
-        else if (this.settings.chatType === 'command' && chat.message.trim() === this.settings.chatCommand) isValid = true;
+        // [수정] 명령어 공백 제거 후 비교
+        else if (this.settings.chatType === 'command' && chat.message.trim() === this.settings.chatCommand.trim()) isValid = true;
 
         if (isValid && !this.candidates.has(chat.profile.userIdHash)) {
             this.candidates.set(chat.profile.userIdHash, { userIdHash: chat.profile.userIdHash, nickname: chat.profile.nickname, source: 'chat' });
@@ -126,8 +130,8 @@ export class DrawManager {
     public getState() {
         return {
             candidatesCount: this.candidates.size,
-            // 실시간 명단을 위해 50명까지 전송
-            candidates: Array.from(this.candidates.values()).slice(-50), 
+            // [중요] Map을 배열로 변환하여 전송 (최신 50명)
+            candidates: Array.from(this.candidates.values()).reverse().slice(0, 50), 
             settings: this.settings,
             isRolling: this.isRolling,
             isActive: this.isActive,

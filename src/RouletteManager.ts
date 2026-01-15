@@ -18,6 +18,8 @@ export class RouletteManager {
     public createRoulette(items: any[]) {
         this.items = items;
         this.winner = null;
+        this.isSpinning = false;
+        // [핵심] 생성 즉시 알림
         this.notify();
     }
 
