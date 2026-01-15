@@ -61,7 +61,7 @@ export class VoteManager {
             totalVotes: 0,
             voters: []
         };
-        this.notify(); // 즉시 알림
+        this.notify();
     }
 
     public startVote() {
@@ -81,26 +81,12 @@ export class VoteManager {
             this.currentVote.isActive = false;
             this.currentVote.endTime = Date.now();
             
-            // DB 저장
-            if (this.currentVote.voters.length > 0) {
-                try {
-                    const payload = this.currentVote.voters.map(v => ({
-                        channel_id: this.bot.getChannelId(),
-                        vote_id: this.currentVote!.id,
-                        user_id_hash: v.userIdHash,
-                        nickname: v.nickname,
-                        option_id: v.optionId
-                    }));
-                    await supabase.from('vote_logs').insert(payload);
-                } catch (e) {}
-            }
-
-            // 기록 이동
+            // 기록 이동 (불변성 유지)
             this.voteHistory.unshift({ ...this.currentVote });
-            if (this.voteHistory.length > 50) this.voteHistory.pop();
+            if (this.voteHistory.length > 20) this.voteHistory.pop();
             
             if (this.bot.chat && this.bot.chat.connected) {
-                this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표`);
+                this.bot.chat.sendChat(`📊 투표가 마감되었습니다. 총 ${this.currentVote.totalVotes}명이 참여했습니다.`);
             }
             
             this.currentVote = null;
@@ -138,8 +124,6 @@ export class VoteManager {
             }
         }
     }
-
-    public async handleDonation(donation: DonationEvent) {}
 
     public getState() { 
         return { 

@@ -7,9 +7,11 @@ export interface DrawCandidate {
     source: 'chat' | 'donation' | 'vote';
 }
 
+/**
+ * DrawManager: 시청자 및 후원자 추첨을 관리합니다.
+ */
 export class DrawManager {
     private candidates: Map<string, DrawCandidate> = new Map();
-    // 초기 설정값 통일
     private settings: any = { mode: 'chat', chatType: 'command', chatCommand: '!참가', donationType: 'all', donationAmount: 1000 };
     private isRolling: boolean = false;
     private isActive: boolean = false;
@@ -20,7 +22,6 @@ export class DrawManager {
         if (initialData) {
             this.isActive = initialData.isActive || false;
             this.settings = initialData.settings || this.settings;
-            // 배열로 저장된 데이터를 다시 Map으로 복구
             if (Array.isArray(initialData.candidates)) {
                 initialData.candidates.forEach((c: any) => this.candidates.set(c.userIdHash, c));
             }
@@ -33,7 +34,7 @@ export class DrawManager {
 
     private notify() {
         this.onStateChangeCallback();
-        this.bot.saveAll();
+        this.bot.saveAll(); // 상태 변경 시 즉시 DB 저장
     }
 
     public startSession(settings: any) {
@@ -41,17 +42,18 @@ export class DrawManager {
         this.winners = [];
         this.isActive = true;
         this.isRolling = false;
+        // 클라이언트 설정을 서버에 동기화
         this.settings = { ...this.settings, ...settings };
-        
-        // [중요] 상태 변경 후 즉시 알림
         this.notify();
         
         if (this.bot.chat && this.bot.chat.connected) {
             let msg = `🎰 [추첨 모집 시작] `;
             if (this.settings.mode === 'chat') {
-                msg += this.settings.chatType === 'any' ? "채팅창에 아무 말이나 입력하세요!" : `'${this.settings.chatCommand}' 입력 시 자동 응모!`;
+                if (this.settings.chatType === 'any') msg += "아무 채팅이나 입력하면 참가됩니다!";
+                else msg += `'${this.settings.chatCommand}' 명령어를 입력하면 참가됩니다!`;
             } else {
-                msg += this.settings.donationType === 'all' ? "후원 시 자동 응모!" : `${this.settings.donationAmount}치즈 후원 시 자동 응모!`;
+                if (this.settings.donationType === 'all') msg += "후원 시 자동으로 참가됩니다!";
+                else msg += `${this.settings.donationAmount}치즈 후원 시 자동으로 참가됩니다!`;
             }
             this.bot.chat.sendChat(msg);
         }
@@ -61,20 +63,14 @@ export class DrawManager {
         this.isActive = false;
         this.notify();
         if (this.bot.chat && this.bot.chat.connected) {
-            this.bot.chat.sendChat(`⛔ [모집 마감] 총 ${this.candidates.size}명이 응모했습니다.`);
+            this.bot.chat.sendChat(`⛔ [추첨 모집 마감] 현재 총 ${this.candidates.size}명이 응모했습니다.`);
         }
     }
 
     public injectCandidatesFromVote(voters: any[]) {
         this.candidates.clear();
-        voters.forEach(v => {
-            this.candidates.set(v.userIdHash, { 
-                userIdHash: v.userIdHash, 
-                nickname: v.nickname, 
-                source: 'vote' 
-            });
-        });
-        this.isActive = false; // 투표자 추첨은 모집 단계 없음
+        voters.forEach(v => this.candidates.set(v.userIdHash, { userIdHash: v.userIdHash, nickname: v.nickname, source: 'vote' }));
+        this.isActive = false;
         this.notify();
     }
 
@@ -86,7 +82,7 @@ export class DrawManager {
         const msg = chat.message.trim();
         
         if (this.settings.chatType === 'any') isValid = true;
-        else if (this.settings.chatType === 'command' && msg === this.settings.chatCommand) isValid = true;
+        else if (this.settings.chatType === 'command' && msg === this.settings.chatCommand.trim()) isValid = true;
 
         if (isValid && !this.candidates.has(chat.profile.userIdHash)) {
             this.candidates.set(chat.profile.userIdHash, { 
@@ -94,7 +90,7 @@ export class DrawManager {
                 nickname: chat.profile.nickname, 
                 source: 'chat' 
             });
-            this.notify(); // 명단 갱신 알림
+            this.notify(); // 명단 추가 시 즉시 알림
         }
     }
 
@@ -119,7 +115,7 @@ export class DrawManager {
         const pool = Array.from(this.candidates.values());
         if (pool.length === 0) return;
 
-        this.isActive = false; // 자동 마감
+        this.isActive = false;
         this.isRolling = true;
         this.winners = [];
         this.notify();
@@ -132,7 +128,7 @@ export class DrawManager {
 
             if (this.winners.length > 0 && this.bot.chat && this.bot.chat.connected) {
                 const names = this.winners.map(w => w.nickname).join(', ');
-                this.bot.chat.sendChat(`🎉 [당첨자 발표] ${names} 축하드립니다!`);
+                this.bot.chat.sendChat(`🎉 [당첨자 발표] ${names}님, 축하드립니다!`);
             }
         }, 3000);
     }
@@ -145,11 +141,10 @@ export class DrawManager {
         this.notify();
     }
 
-    // [핵심] Map을 배열로 변환하여 전송 (JSON 직렬화 문제 해결)
     public getState() {
         return {
             candidatesCount: this.candidates.size,
-            candidates: Array.from(this.candidates.values()).reverse(), // 전체 명단 전송
+            candidates: Array.from(this.candidates.values()).reverse(), // 명단 배열화
             settings: this.settings,
             isRolling: this.isRolling,
             isActive: this.isActive,

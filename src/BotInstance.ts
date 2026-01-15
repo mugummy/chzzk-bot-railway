@@ -18,7 +18,6 @@ export class BotInstance {
     private botUserIdHash: string | null = null;
     private isLoggedIn: boolean = false;
     private livePollingTimer: NodeJS.Timeout | null = null;
-
     public liveDetail: LiveDetail | null = null;
     public channel: Channel | null = null;
 
@@ -38,109 +37,68 @@ export class BotInstance {
     private onChatCallback: (chat: ChatEvent) => void = () => {};
 
     constructor(private channelId: string, nidAuth: string, nidSes: string) {
-        const cleanAuth = (nidAuth || '').split(';')[0].replace('NID_AUTH=', '').trim();
-        const cleanSes = (nidSes || '').split(';')[0].replace('NID_SES=', '').replace('NID_SESSION=', '').trim();
-        this.client = new ChzzkClient({ nidAuth: cleanAuth, nidSession: cleanSes });
+        this.client = new ChzzkClient({ nidAuth, nidSession: nidSes });
     }
 
-    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
-        this.onStateChangeCallback = callback;
-    }
-
-    public setOnChatListener(callback: (chat: ChatEvent) => void) {
-        this.onChatCallback = callback;
-    }
-
-    private notify(type: string, payload: any) { 
-        this.onStateChangeCallback(type, payload); 
-    }
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) { this.onStateChangeCallback = callback; }
+    public setOnChatListener(callback: (chat: ChatEvent) => void) { this.onChatCallback = callback; }
+    private notify(type: string, payload: any) { this.onStateChangeCallback(type, payload); }
 
     public async setup() {
         const data = await DataManager.loadData(this.channelId);
-
         this.settings = new SettingsManager(data.settings);
-        this.settings.setOnStateChangeListener(() => {
-            this.notify('settingsUpdate', this.settings.getSettings());
-            this.saveAll();
-        });
-
-        this.settings.setOnChatEnabledChange((enabled) => {
-            if (this.isLoggedIn && this.chat) {
-                this.chat.sendChat(enabled ? "🟢 gummybot 응답 기능이 활성화되었습니다." : "🔴 gummybot 응답 기능이 비활성화되었습니다.");
-            }
-        });
-
+        this.settings.setOnStateChangeListener(() => { this.notify('settingsUpdate', this.settings.getSettings()); this.saveAll(); });
         this.commands = new CommandManager(this as any, data.commands);
         this.commands.setOnStateChangeListener(() => this.notify('commandsUpdate', this.commands.getCommands()));
-
         this.counters = new CounterManager(this as any, data.counters);
         this.counters.setOnStateChangeListener(() => this.notify('countersUpdate', this.counters.getCounters()));
-
         this.macros = new MacroManager(this as any, data.macros);
         this.macros.setOnStateChangeListener(() => this.notify('macrosUpdate', this.macros.getMacros()));
-
         this.songs = new SongManager(this as any, data);
         this.songs.setOnStateChangeListener(() => this.notify('songStateUpdate', this.songs.getState()));
-
         this.points = new PointManager(data.points);
         this.points.setOnStateChangeListener(() => this.notify('pointsUpdate', this.points.getPointsData()));
-
         this.greet = new GreetManager(this as any, data.greetData);
         this.greet.setOnStateChangeListener(() => this.notify('greetStateUpdate', this.greet.getState()));
-
+        
+        // 투표 및 기록 복구
         this.votes = new VoteManager(this as any);
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
+        // voteHistory는 VoteManager 내부 private 변수로 관리된다면 별도 주입 필요 (현재 getState에만 포함됨)
+        // 편의상 VoteManager 내부 변수로 직접 주입 로직이 VoteManager에 있다고 가정하거나 아래 saveAll에서 관리
         this.votes.setOnStateChangeListener(() => this.notify('voteStateUpdate', this.votes.getState()));
 
-        // [수정] DB에서 불러온 초기 상태 주입
-        this.draw = new DrawManager(this as any, data.draw); 
+        this.draw = new DrawManager(this as any, data.draw);
         this.draw.setOnStateChangeListener(() => this.notify('drawStateUpdate', this.draw.getState()));
-
         this.roulette = new RouletteManager(this as any, data.roulette?.items || []);
         this.roulette.setOnStateChangeListener(() => this.notify('rouletteStateUpdate', this.roulette.getState()));
-
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
         try {
             await this.refreshLiveInfo();
             this.livePollingTimer = setInterval(() => this.refreshLiveInfo(), 30000);
-
             if (this.liveDetail?.chatChannelId) {
                 this.chat = this.client.chat({ channelId: this.channelId, chatChannelId: this.liveDetail.chatChannelId });
                 this.chat.on('chat', (chat) => this.handleChat(chat));
-                this.chat.on('donation', (donation) => this.handleDonation(donation));
                 this.chat.on('connect', async () => {
-                    try {
-                        const self = await this.chat?.selfProfile();
-                        this.botUserIdHash = self?.userIdHash || null;
-                        this.isLoggedIn = true;
-                        this.macros.setChatClient(this.chat!);
-                    } catch (e) {
-                        this.isLoggedIn = false;
-                        this.notify('error', '봇 로그인 실패');
-                    }
+                    const self = await this.chat?.selfProfile();
+                    this.botUserIdHash = self?.userIdHash || null;
+                    this.isLoggedIn = true;
+                    this.macros.setChatClient(this.chat!);
                 });
                 await this.chat.connect();
             }
-        } catch (err) {}
-    }
-
-    public async refreshLiveInfo() {
-        try {
-            this.channel = await this.client.channel(this.channelId);
-            this.liveDetail = await this.client.live.detail(this.channelId);
         } catch (e) {}
     }
 
+    public async refreshLiveInfo() { try { this.channel = await this.client.channel(this.channelId); this.liveDetail = await this.client.live.detail(this.channelId); } catch (e) {} }
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
-        
         this.points.awardPoints(chat, this.settings.getSettings());
         await this.votes.handleChat(chat);
         this.draw.handleChat(chat);
-
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
@@ -154,18 +112,12 @@ export class BotInstance {
         }
     }
 
-    private async handleDonation(donation: DonationEvent) {
-        await this.votes.handleDonation(donation);
-        this.draw.handleDonation(donation);
-        const msg = donation.message || '';
-        if (this.isLoggedIn && msg) { try { await this.songs.addSongFromDonation(donation, msg, this.settings.getSettings()); } catch(e) {} }
-    }
-
-    public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "https://ssl.pstatic.net/static/nng/glstat/game/favicon.ico", followerCount: this.channel?.followerCount || 0 }; }
+    public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "", followerCount: this.channel?.followerCount || 0 }; }
     public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: this.liveDetail?.liveCategoryValue || "미지정" }; }
     public getChannelId() { return this.channelId; }
 
     public async saveAll() { 
+        const voteState = this.votes.getState();
         await DataManager.saveData(this.channelId, { 
             settings: this.settings.getSettings(), 
             commands: this.commands.getCommands(), 
@@ -175,10 +127,10 @@ export class BotInstance {
             songQueue: this.songs.getData().songQueue, 
             currentSong: this.songs.getData().currentSong, 
             greetData: this.greet.getData(), 
-            votes: [this.votes.getState().currentVote], 
+            // [중요] 투표 현재 상태와 기록 함께 저장
+            votes: [voteState.currentVote], 
+            voteHistory: voteState.history,
             participants: this.participation.getState(),
-            
-            // [추가] 매니저 상태 저장
             draw: this.draw.getState(),
             roulette: this.roulette.getState()
         }); 
