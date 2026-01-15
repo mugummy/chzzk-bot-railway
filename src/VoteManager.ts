@@ -29,16 +29,18 @@ export interface VoteSession {
 export class VoteManager {
     private currentVote: VoteSession | null = null;
     private voteHistory: VoteSession[] = [];
-    private onStateChangeCallback: () => void = () => {};
+    // [수정] 콜백 시그니처 변경: (type, payload) 받음
+    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(private bot: BotInstance) {}
 
-    public setOnStateChangeListener(callback: () => void) {
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
+    // [핵심] 빈 호출이 아니라, 이벤트 타입과 데이터를 실어서 보냄
     private notify() {
-        this.onStateChangeCallback();
+        this.onStateChangeCallback('voteStateUpdate', this.getState());
         this.bot.saveAll();
     }
 
@@ -81,12 +83,24 @@ export class VoteManager {
             this.currentVote.isActive = false;
             this.currentVote.endTime = Date.now();
             
-            // 기록 이동 (불변성 유지)
+            if (this.currentVote.voters.length > 0) {
+                try {
+                    const payload = this.currentVote.voters.map(v => ({
+                        channel_id: this.bot.getChannelId(),
+                        vote_id: this.currentVote!.id,
+                        user_id_hash: v.userIdHash,
+                        nickname: v.nickname,
+                        option_id: v.optionId
+                    }));
+                    await supabase.from('vote_logs').insert(payload);
+                } catch (e) {}
+            }
+
             this.voteHistory.unshift({ ...this.currentVote });
-            if (this.voteHistory.length > 20) this.voteHistory.pop();
+            if (this.voteHistory.length > 50) this.voteHistory.pop();
             
             if (this.bot.chat && this.bot.chat.connected) {
-                this.bot.chat.sendChat(`📊 투표가 마감되었습니다. 총 ${this.currentVote.totalVotes}명이 참여했습니다.`);
+                this.bot.chat.sendChat(`📊 투표 종료! 총 ${this.currentVote.totalVotes}표`);
             }
             
             this.currentVote = null;
@@ -124,6 +138,8 @@ export class VoteManager {
             }
         }
     }
+
+    public async handleDonation(donation: DonationEvent) {}
 
     public getState() { 
         return { 

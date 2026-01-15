@@ -2,18 +2,20 @@ export class RouletteManager {
     private items: any[] = [];
     private isSpinning: boolean = false;
     private winner: any = null;
-    private onStateChangeCallback: () => void = () => {};
+    // [수정] 콜백 시그니처 변경
+    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(private bot: any, initialData?: any[]) {
         this.items = initialData || [];
     }
 
-    public setOnStateChangeListener(callback: () => void) {
+    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
+    // [핵심] 데이터 실어서 알림
     private notify() {
-        this.onStateChangeCallback();
+        this.onStateChangeCallback('rouletteStateUpdate', this.getState());
         this.bot.saveAll();
     }
 
@@ -21,7 +23,6 @@ export class RouletteManager {
         this.items = items;
         this.winner = null;
         this.isSpinning = false;
-        // [중요] 생성 즉시 알림
         this.notify();
     }
 

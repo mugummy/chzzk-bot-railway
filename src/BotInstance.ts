@@ -61,17 +61,19 @@ export class BotInstance {
         this.greet = new GreetManager(this as any, data.greetData);
         this.greet.setOnStateChangeListener(() => this.notify('greetStateUpdate', this.greet.getState()));
         
-        // 투표 및 기록 복구
+        // 투표 매니저 설정 (콜백 수정됨)
         this.votes = new VoteManager(this as any);
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
-        // voteHistory는 VoteManager 내부 private 변수로 관리된다면 별도 주입 필요 (현재 getState에만 포함됨)
-        // 편의상 VoteManager 내부 변수로 직접 주입 로직이 VoteManager에 있다고 가정하거나 아래 saveAll에서 관리
-        this.votes.setOnStateChangeListener(() => this.notify('voteStateUpdate', this.votes.getState()));
+        this.votes.setOnStateChangeListener((type, payload) => this.notify(type, payload));
 
+        // 추첨 매니저 설정 (콜백 수정됨)
         this.draw = new DrawManager(this as any, data.draw);
-        this.draw.setOnStateChangeListener(() => this.notify('drawStateUpdate', this.draw.getState()));
+        this.draw.setOnStateChangeListener((type, payload) => this.notify(type, payload));
+
+        // 룰렛 매니저 설정 (콜백 수정됨)
         this.roulette = new RouletteManager(this as any, data.roulette?.items || []);
-        this.roulette.setOnStateChangeListener(() => this.notify('rouletteStateUpdate', this.roulette.getState()));
+        this.roulette.setOnStateChangeListener((type, payload) => this.notify(type, payload));
+
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
@@ -127,7 +129,6 @@ export class BotInstance {
             songQueue: this.songs.getData().songQueue, 
             currentSong: this.songs.getData().currentSong, 
             greetData: this.greet.getData(), 
-            // [중요] 투표 현재 상태와 기록 함께 저장
             votes: [voteState.currentVote], 
             voteHistory: voteState.history,
             participants: this.participation.getState(),
