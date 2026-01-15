@@ -123,6 +123,13 @@ export class VoteManager {
         this.notify();
     }
 
+    // [New] 투표 초기화
+    public async resetVote() {
+        this.currentVote = null;
+        this.bot.overlayManager?.setView('none');
+        this.notify();
+    }
+
     // [New] 투표자 명단 가져오기
     public async getBallots(voteId: string) {
         const { data: ballots } = await supabase

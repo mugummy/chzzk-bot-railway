@@ -150,6 +150,7 @@ wss.on('connection', async (ws, req) => {
                 case 'startVote': await bot.vote.startVote(); break;
                 case 'endVote': await bot.vote.endVote(); break;
                 case 'deleteVote': await bot.vote.deleteVote(data.voteId); break;
+                case 'resetVote': await bot.vote.resetVote(); break;
                 case 'pickVoteWinner': 
                     const winners = await bot.vote.pickWinner(data.voteId, data.optionId, data.count);
                     ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: winners }));
@@ -158,16 +159,14 @@ wss.on('connection', async (ws, req) => {
                     const ballots = await bot.vote.getBallots(data.voteId);
                     ws.send(JSON.stringify({ type: 'voteBallotsResponse', payload: ballots }));
                     break;
-                case 'getVoteHistory':
-                    const history = await bot.vote.getVoteHistory();
-                    ws.send(JSON.stringify({ type: 'voteHistoryResponse', payload: history }));
-                    break;
                 
                 case 'startDraw': bot.draw.startDraw(data.settings); break;
                 case 'pickWinners': await bot.draw.pickWinners(); break;
+                case 'resetDraw': bot.draw.resetDraw(); break;
                 
                 case 'updateRoulette': bot.roulette.updateItems(data.items); break;
                 case 'spinRoulette': bot.roulette.spin(); break;
+                case 'resetRoulette': bot.roulette.resetRoulette(); break;
                 
                 case 'toggleOverlay': bot.overlayManager.setVisible(data.visible); break;
                 case 'setOverlayView': bot.overlayManager.setView(data.view); break;

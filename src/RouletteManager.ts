@@ -32,6 +32,13 @@ export class RouletteManager {
         this.notify();
     }
 
+    public resetRoulette() {
+        // 아이템은 유지하되, 선택된 결과만 초기화하거나 아예 싹 비우기
+        // 기획 의도상 "초기화"는 오버레이 끄고 상태 리셋이므로
+        this.bot.overlayManager?.setView('none');
+        this.notify();
+    }
+
     public spin() {
         if (this.items.length === 0) return;
 

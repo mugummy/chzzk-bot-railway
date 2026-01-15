@@ -93,6 +93,17 @@ export class DrawManager {
         }
     }
 
+    // [New] 추첨 초기화
+    public resetDraw() {
+        this.isCollecting = false;
+        this.participants.clear();
+        this.donationPool = [];
+        this.winners = [];
+        this.drawStatus = 'idle';
+        this.bot.overlayManager?.setView('none');
+        this.notify();
+    }
+
     // 채팅 이벤트 핸들링 (참여 명령어)
     public handleChat(chat: ChatEvent) {
         if (!this.isCollecting || !this.currentSettings) return;
