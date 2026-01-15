@@ -9,14 +9,23 @@ export interface DrawCandidate {
 
 export class DrawManager {
     private candidates: Map<string, DrawCandidate> = new Map();
-    // [수정] 기본값을 클라이언트와 동일하게 !참가로 통일
     private settings: any = { mode: 'chat', chatType: 'command', chatCommand: '!참가', donationType: 'all', donationAmount: 1000 };
     private isRolling: boolean = false;
     private isActive: boolean = false;
     private winners: DrawCandidate[] = [];
     private onStateChangeCallback: () => void = () => {};
 
-    constructor(private bot: BotInstance) {}
+    // [수정] 초기 데이터 로드
+    constructor(private bot: BotInstance, initialData?: any) {
+        if (initialData) {
+            this.isActive = initialData.isActive || false;
+            this.settings = initialData.settings || this.settings;
+            // Map 복구 (JSON 배열 -> Map)
+            if (Array.isArray(initialData.candidates)) {
+                initialData.candidates.forEach((c: any) => this.candidates.set(c.userIdHash, c));
+            }
+        }
+    }
 
     public setOnStateChangeListener(callback: () => void) {
         this.onStateChangeCallback = callback;
@@ -24,8 +33,8 @@ export class DrawManager {
 
     private notify() {
         this.onStateChangeCallback();
-        // 추첨 데이터는 빈번하게 변하므로 매번 DB 저장은 하지 않음 (성능 최적화)
-        // 단, settings 변경 시에는 저장 필요 -> startSession에서 처리
+        // 중요한 상태 변경 시 저장 트리거 (BotInstance.saveAll 호출됨)
+        this.bot.saveAll();
     }
 
     public startSession(settings: any) {
@@ -33,18 +42,15 @@ export class DrawManager {
         this.winners = [];
         this.isActive = true;
         this.isRolling = false;
-        // [중요] 클라이언트에서 온 설정을 확실하게 적용
         this.settings = { ...this.settings, ...settings };
         this.notify();
         
         if (this.bot.chat && this.bot.chat.connected) {
             let msg = `🎰 [추첨 모집 시작] `;
             if (this.settings.mode === 'chat') {
-                if (this.settings.chatType === 'any') msg += "채팅창에 아무 말이나 입력하면 자동 응모됩니다!";
-                else msg += `'${this.settings.chatCommand}' 입력 시 자동 응모됩니다!`;
+                msg += this.settings.chatType === 'any' ? "채팅창에 아무 말이나 입력하면 자동 응모!" : `'${this.settings.chatCommand}' 입력 시 자동 응모!`;
             } else {
-                if (this.settings.donationType === 'all') msg += "금액 상관없이 후원 시 자동 응모됩니다!";
-                else msg += `${this.settings.donationAmount}치즈를 후원하면 자동 응모됩니다!`;
+                msg += this.settings.donationType === 'all' ? "후원 시 자동 응모!" : `${this.settings.donationAmount}치즈 후원 시 자동 응모!`;
             }
             this.bot.chat.sendChat(msg);
         }
@@ -71,7 +77,6 @@ export class DrawManager {
 
         let isValid = false;
         if (this.settings.chatType === 'any') isValid = true;
-        // [수정] 명령어 공백 제거 후 비교
         else if (this.settings.chatType === 'command' && chat.message.trim() === this.settings.chatCommand.trim()) isValid = true;
 
         if (isValid && !this.candidates.has(chat.profile.userIdHash)) {
@@ -130,7 +135,6 @@ export class DrawManager {
     public getState() {
         return {
             candidatesCount: this.candidates.size,
-            // [중요] Map을 배열로 변환하여 전송 (최신 50명)
             candidates: Array.from(this.candidates.values()).reverse().slice(0, 50), 
             settings: this.settings,
             isRolling: this.isRolling,

@@ -12,10 +12,6 @@ import { ParticipationManager } from './ParticipationManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
 
-/**
- * BotInstance: 개별 채널의 실시간 로직을 총괄하는 핵심 엔진
- * 모든 메서드가 누락 없이 포함된 100% 풀 버전입니다.
- */
 export class BotInstance {
     private client: ChzzkClient;
     public chat: ChzzkChat | null = null;
@@ -96,10 +92,11 @@ export class BotInstance {
         if (data.votes?.[0]) this.votes.setCurrentVote(data.votes[0]);
         this.votes.setOnStateChangeListener(() => this.notify('voteStateUpdate', this.votes.getState()));
 
-        this.draw = new DrawManager(this as any);
+        // [수정] DB에서 불러온 초기 상태 주입
+        this.draw = new DrawManager(this as any, data.draw); 
         this.draw.setOnStateChangeListener(() => this.notify('drawStateUpdate', this.draw.getState()));
 
-        this.roulette = new RouletteManager(this as any, []);
+        this.roulette = new RouletteManager(this as any, data.roulette?.items || []);
         this.roulette.setOnStateChangeListener(() => this.notify('rouletteStateUpdate', this.roulette.getState()));
 
         this.participation = new ParticipationManager(this as any, data.participants);
@@ -166,11 +163,7 @@ export class BotInstance {
 
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "https://ssl.pstatic.net/static/nng/glstat/game/favicon.ico", followerCount: this.channel?.followerCount || 0 }; }
     public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: this.liveDetail?.liveCategoryValue || "미지정" }; }
-    
-    // [핵심 복구] DrawManager 등에서 호출하는 채널 ID 반환 메서드
-    public getChannelId() {
-        return this.channelId;
-    }
+    public getChannelId() { return this.channelId; }
 
     public async saveAll() { 
         await DataManager.saveData(this.channelId, { 
@@ -183,7 +176,11 @@ export class BotInstance {
             currentSong: this.songs.getData().currentSong, 
             greetData: this.greet.getData(), 
             votes: [this.votes.getState().currentVote], 
-            participants: this.participation.getState() 
+            participants: this.participation.getState(),
+            
+            // [추가] 매니저 상태 저장
+            draw: this.draw.getState(),
+            roulette: this.roulette.getState()
         }); 
     }
 
