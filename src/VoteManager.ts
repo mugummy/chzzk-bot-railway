@@ -59,7 +59,7 @@ export class VoteManager {
         // 옵션 데이터 준비
         const optionInserts = options.map(label => ({
             vote_id: voteData.id,
-            label: String(label), // 확실하게 문자열 변환
+            label: String(label), 
             count: 0
         }));
 
@@ -72,12 +72,16 @@ export class VoteManager {
             console.error('[VoteManager] Option Insert Error:', optError);
         }
 
+        // [Fix] DB 리턴값(optionsData)이 비어있을 수 있으므로, 입력받은 options를 기반으로 초기화 보장
         this.currentVote = {
             id: voteData.id,
             title: voteData.title,
             status: 'ready',
             mode: voteData.mode,
-            options: (optionsData || []).map(o => ({ id: o.id, label: o.label, count: 0 })),
+            // id는 DB에서 생성되므로 optionsData가 있으면 쓰고, 없으면 임시 ID 사용 (렌더링 문제 방지)
+            options: (optionsData && optionsData.length > 0) 
+                ? optionsData.map(o => ({ id: o.id, label: o.label, count: 0 }))
+                : options.map((label, i) => ({ id: `temp_${i}`, label: String(label), count: 0 })),
             totalParticipants: 0
         };
         
@@ -94,7 +98,6 @@ export class VoteManager {
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             const modeText = this.currentVote.mode === 'normal' ? '일반 투표(1인 1표)' : '후원 투표(금액 비례)';
             
-            // options가 문자열 배열일 수도, 객체 배열일 수도 있음. 방어 코드 추가.
             const optionsText = this.currentVote.options.map((o: any, i: number) => {
                 const label = typeof o === 'string' ? o : (o.label || '항목');
                 return `${i+1}. ${label}`;
@@ -118,8 +121,6 @@ export class VoteManager {
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             this.bot.chat.sendChat(`🛑 [투표 마감] '${this.currentVote.title}' 투표가 종료되었습니다.`);
             
-            // 결과 요약 (참여자가 있을 때만)
-            // totalParticipants 체크 및 options.length 체크
             if ((this.currentVote.totalParticipants || 0) > 0 && this.currentVote.options.length > 0) {
                 const topOption = this.currentVote.options.reduce((prev, current) => (prev.count > current.count) ? prev : current);
                 this.bot.chat.sendChat(`🏆 최다 득표: ${topOption.label} (${topOption.count}표)`);
@@ -131,19 +132,19 @@ export class VoteManager {
         this.notify();
     }
 
+    // [New] 투표 초기화
+    public async resetVote() {
+        this.currentVote = null;
+        this.bot.overlayManager?.setView('none');
+        this.notify();
+    }
+
     // [New] 투표 삭제
     public async deleteVote(voteId: string) {
         await supabase.from('votes').delete().eq('id', voteId);
         if (this.currentVote?.id === voteId) {
             this.currentVote = null;
         }
-        this.notify();
-    }
-
-    // [New] 투표 초기화
-    public async resetVote() {
-        this.currentVote = null;
-        this.bot.overlayManager?.setView('none');
         this.notify();
     }
 
@@ -174,12 +175,16 @@ export class VoteManager {
 
     // [New] 투표 기록 가져오기
     public async getVoteHistory() {
-        const { data: votes } = await supabase
+        // vote_options 조인은 데이터가 많아질 수 있으므로 목록 조회에선 제외
+        const { data: votes, error } = await supabase
             .from('votes')
-            .select(`*, vote_options(*)`)
+            .select('*')
             .eq('channel_id', this.bot.getChannelId())
             .eq('status', 'ended')
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(20);
+            
+        if (error) console.error('[VoteManager] History Error:', error);
         return votes || [];
     }
 
@@ -225,7 +230,6 @@ export class VoteManager {
         const option = this.currentVote.options[optionIndex];
         const userId = chat.profile.userIdHash;
 
-        // DB에서 중복 투표 확인
         const { data: exist } = await supabase
             .from('vote_ballots')
             .select('id')
@@ -233,9 +237,8 @@ export class VoteManager {
             .eq('user_id_hash', userId)
             .single();
 
-        if (exist) return; // 이미 투표함
+        if (exist) return; 
 
-        // 투표 반영
         await supabase.from('vote_ballots').insert({
             vote_id: this.currentVote.id,
             user_id_hash: userId,
@@ -243,11 +246,9 @@ export class VoteManager {
             amount: 1
         });
 
-        // 메모리 상태 업데이트 (실시간성)
         option.count++;
         this.currentVote.totalParticipants++;
         
-        // DB 카운트 업데이트 (비동기)
         await supabase.rpc('increment_vote_option', { row_id: option.id, x: 1 });
         
         this.notify();
@@ -257,7 +258,6 @@ export class VoteManager {
     public async handleDonation(donation: DonationEvent) {
         if (!this.currentVote || this.currentVote.status !== 'active' || this.currentVote.mode !== 'donation') return;
         
-        // 메시지에서 "!투표 N" 파싱
         const msg = donation.message || '';
         const match = msg.match(/!투표\s+(\d+)/);
         if (!match) return;
@@ -269,7 +269,6 @@ export class VoteManager {
         const option = this.currentVote.options[optionIndex];
         const amount = donation.payAmount || 0;
 
-        // 후원 투표는 중복 가능 (금액 누적)
         await supabase.from('vote_ballots').insert({
             vote_id: this.currentVote.id,
             user_id_hash: donation.profile?.userIdHash || 'unknown',
@@ -278,9 +277,8 @@ export class VoteManager {
         });
 
         option.count += amount;
-        this.currentVote.totalParticipants++; // 참여 횟수 증가 (사람 수가 아님)
+        this.currentVote.totalParticipants++; 
         
-        // DB 카운트 업데이트
         await supabase.rpc('increment_vote_option', { row_id: option.id, x: amount });
 
         this.notify();
