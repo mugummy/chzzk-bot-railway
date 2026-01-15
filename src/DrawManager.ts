@@ -51,10 +51,27 @@ export class DrawManager {
         this.winners = [];
         this.drawStatus = 'idle';
         
-        // 후원자 추첨인 경우 DB에서 최근 후원 내역 로드 (예: 최근 1시간?) -> 여기서는 단순화를 위해 실시간 모집 or 전체 로드
-        // 기획상 "후원자 자동 수집"이므로, 별도 함수로 DB에서 긁어오는게 좋음.
         if (settings.target === 'donation') {
             this.loadDonors(settings.minAmount || 0);
+        }
+
+        // [New] 채팅 알림
+        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
+            let msg = `📢 [추첨 시작] ${settings.winnerCount}명을 뽑습니다!`;
+            let subMsg = '';
+
+            if (settings.target === 'chat') {
+                subMsg = `👉 채팅창에 '${settings.command || '!참여'}'를 입력하세요!`;
+            } else if (settings.target === 'all') {
+                subMsg = `👉 채팅을 입력하면 자동으로 참여됩니다!`;
+            } else if (settings.target === 'subscriber') {
+                subMsg = `👉 채팅을 입력하면 참여됩니다! (⭐구독자 전용)`;
+            } else if (settings.target === 'donation') {
+                subMsg = `👉 ${settings.minAmount}원 이상 후원하신 분들 대상입니다!`;
+            }
+
+            this.bot.chat.sendChat(msg);
+            if (subMsg) this.bot.chat.sendChat(subMsg);
         }
 
         this.notify();

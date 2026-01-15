@@ -149,6 +149,19 @@ wss.on('connection', async (ws, req) => {
                 case 'createVote': await bot.vote.createVote(data.title, data.options, data.mode); break;
                 case 'startVote': await bot.vote.startVote(); break;
                 case 'endVote': await bot.vote.endVote(); break;
+                case 'deleteVote': await bot.vote.deleteVote(data.voteId); break;
+                case 'pickVoteWinner': 
+                    const winners = await bot.vote.pickWinner(data.voteId, data.optionId, data.count);
+                    ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: winners }));
+                    break;
+                case 'getBallots':
+                    const ballots = await bot.vote.getBallots(data.voteId);
+                    ws.send(JSON.stringify({ type: 'voteBallotsResponse', payload: ballots }));
+                    break;
+                case 'getVoteHistory':
+                    const history = await bot.vote.getVoteHistory();
+                    ws.send(JSON.stringify({ type: 'voteHistoryResponse', payload: history }));
+                    break;
                 
                 case 'startDraw': bot.draw.startDraw(data.settings); break;
                 case 'pickWinners': await bot.draw.pickWinners(); break;

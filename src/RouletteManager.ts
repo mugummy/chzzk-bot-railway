@@ -48,6 +48,14 @@ export class RouletteManager {
             }
         }
 
+        // [New] 채팅 알림
+        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
+            this.bot.chat.sendChat(`🎡 룰렛이 돌아갑니다! 과연 결과는?!`);
+            setTimeout(() => {
+                this.bot.chat?.sendChat(`🎉 결과: [${selectedItem.label}]`);
+            }, 5000); // 오버레이 애니메이션 시간 고려
+        }
+
         // 오버레이에 회전 명령
         this.bot.overlayManager?.startRouletteAnimation(selectedItem);
     }
