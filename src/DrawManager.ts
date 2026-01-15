@@ -30,7 +30,7 @@ export class DrawManager {
         this.onStateChangeCallback = callback;
     }
 
-    // [핵심] 데이터 실어서 알림
+    // [핵심 수정] 타입과 데이터 전송
     private notify() {
         this.onStateChangeCallback('drawStateUpdate', this.getState());
         this.bot.saveAll();

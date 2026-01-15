@@ -29,7 +29,7 @@ export interface VoteSession {
 export class VoteManager {
     private currentVote: VoteSession | null = null;
     private voteHistory: VoteSession[] = [];
-    // [수정] 콜백 시그니처 변경: (type, payload) 받음
+    // [수정] 콜백 타입 정의: 인자를 받도록 변경
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(private bot: BotInstance) {}
@@ -38,7 +38,7 @@ export class VoteManager {
         this.onStateChangeCallback = callback;
     }
 
-    // [핵심] 빈 호출이 아니라, 이벤트 타입과 데이터를 실어서 보냄
+    // [핵심 수정] 타입과 데이터를 실어서 콜백 호출
     private notify() {
         this.onStateChangeCallback('voteStateUpdate', this.getState());
         this.bot.saveAll();
