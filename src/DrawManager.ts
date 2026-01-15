@@ -142,21 +142,26 @@ export class DrawManager {
     // 추첨 실행 (결과 산출)
     public async pickWinners() {
         if (!this.currentSettings) return;
-        this.isCollecting = false;
+        
+        // [Safety Check] 모집이 마감되지 않은 상태라면 자동으로 마감 처리
+        if (this.isCollecting) this.isCollecting = false;
         this.drawStatus = 'rolling';
         
         let pool: any[] = [];
 
         if (this.currentSettings.target === 'donation') {
-            // 후원자 풀 (가중치 적용 가능)
             pool = this.donationPool;
         } else {
-            // 시청자 풀
-            pool = Array.from(this.participants).map(p => JSON.parse(p));
+            pool = Array.from(this.participants).map(p => {
+                try { return JSON.parse(p); } catch(e) { return null; }
+            }).filter(p => p !== null);
         }
 
         if (pool.length === 0) {
-            this.drawStatus = 'completed';
+            console.log('[DrawManager] No participants.');
+            // 참여자 없음 알림
+            if (this.bot.chat) this.bot.chat.sendChat('📢 참여자가 없어 추첨을 진행할 수 없습니다.');
+            this.drawStatus = 'idle'; // 다시 대기 상태로
             this.notify();
             return;
         }
@@ -179,13 +184,17 @@ export class DrawManager {
         // 오버레이에 애니메이션 시작 신호 전송
         this.bot.overlayManager?.startDrawAnimation(winners);
 
-        // DB 저장
-        await supabase.from('draw_history').insert({
-            channel_id: this.bot.getChannelId(),
-            type: this.currentSettings.target,
-            winners: winners,
-            settings: this.currentSettings
-        });
+        try {
+            // DB 저장
+            await supabase.from('draw_history').insert({
+                channel_id: this.bot.getChannelId(),
+                type: this.currentSettings.target,
+                winners: winners,
+                settings: this.currentSettings
+            });
+        } catch (err) {
+            console.error('[DrawManager] DB Save Error:', err);
+        }
 
         // 3초 후 상태 완료로 변경 (애니메이션 시간 고려)
         setTimeout(() => {
@@ -193,6 +202,12 @@ export class DrawManager {
             this.notify();
             // 웹소켓으로 대시보드에 결과 알림 (TTS용)
             this.onStateChangeCallback('drawWinnerResult', { winners });
+            
+            // [New] 결과 발표 채팅
+            if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
+                const names = winners.map(w => w.nickname || w.nick).join(', ');
+                this.bot.chat.sendChat(`🎉 당첨을 축하합니다! [ ${names} ]`);
+            }
         }, 3000);
     }
 }

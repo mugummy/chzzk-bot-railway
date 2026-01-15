@@ -42,7 +42,7 @@ export class VoteManager {
 
     // 투표 생성
     public async createVote(title: string, options: string[], mode: 'normal' | 'donation' = 'normal') {
-        console.log(`[VoteManager] Creating vote: ${title} (${mode}) for ${this.bot.getChannelId()}`);
+        console.log(`[VoteManager] Creating vote: ${title}, Options: ${JSON.stringify(options)}`);
         
         const { data: voteData, error } = await supabase
             .from('votes')
@@ -56,16 +56,21 @@ export class VoteManager {
         }
         if (!voteData) throw new Error('투표 생성 실패: 데이터 없음');
 
+        // 옵션 데이터 준비
         const optionInserts = options.map(label => ({
             vote_id: voteData.id,
-            label,
+            label: String(label), // 확실하게 문자열 변환
             count: 0
         }));
 
-        const { data: optionsData } = await supabase
+        const { data: optionsData, error: optError } = await supabase
             .from('vote_options')
             .insert(optionInserts)
             .select();
+
+        if (optError) {
+            console.error('[VoteManager] Option Insert Error:', optError);
+        }
 
         this.currentVote = {
             id: voteData.id,
@@ -75,6 +80,7 @@ export class VoteManager {
             options: (optionsData || []).map(o => ({ id: o.id, label: o.label, count: 0 })),
             totalParticipants: 0
         };
+        
         this.notify();
     }
 
@@ -113,7 +119,8 @@ export class VoteManager {
             this.bot.chat.sendChat(`🛑 [투표 마감] '${this.currentVote.title}' 투표가 종료되었습니다.`);
             
             // 결과 요약 (참여자가 있을 때만)
-            if (this.currentVote.totalParticipants > 0 && this.currentVote.options.length > 0) {
+            // totalParticipants 체크 및 options.length 체크
+            if ((this.currentVote.totalParticipants || 0) > 0 && this.currentVote.options.length > 0) {
                 const topOption = this.currentVote.options.reduce((prev, current) => (prev.count > current.count) ? prev : current);
                 this.bot.chat.sendChat(`🏆 최다 득표: ${topOption.label} (${topOption.count}표)`);
             } else {
