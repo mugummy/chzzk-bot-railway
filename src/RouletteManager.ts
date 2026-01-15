@@ -33,16 +33,15 @@ export class RouletteManager {
     }
 
     public resetRoulette() {
-        // 아이템은 유지하되, 선택된 결과만 초기화하거나 아예 싹 비우기
-        // 기획 의도상 "초기화"는 오버레이 끄고 상태 리셋이므로
+        // 아이템은 유지하되, 선택된 결과만 초기화
         this.bot.overlayManager?.setView('none');
-        this.notify();
+        // 대시보드에도 초기화 알림
+        this.bot.broadcast('rouletteStateUpdate', this.getState());
     }
 
     public spin() {
         if (this.items.length === 0) return;
 
-        // 가중치 기반 랜덤 선택
         const totalWeight = this.items.reduce((sum, item) => sum + item.weight, 0);
         let random = Math.random() * totalWeight;
         let selectedItem = this.items[0];
@@ -55,15 +54,16 @@ export class RouletteManager {
             }
         }
 
-        // [New] 채팅 알림
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             this.bot.chat.sendChat(`🎡 룰렛이 돌아갑니다! 과연 결과는?!`);
             setTimeout(() => {
                 this.bot.chat?.sendChat(`🎉 결과: [${selectedItem.label}]`);
-            }, 5000); // 오버레이 애니메이션 시간 고려
+            }, 5000); 
         }
 
-        // 오버레이에 회전 명령
+        // 오버레이 및 대시보드 모두에 이벤트 전송
         this.bot.overlayManager?.startRouletteAnimation(selectedItem);
+        // 대시보드가 오버레이 이벤트를 못 받을 수 있으므로 별도 전송 (선택 사항이나 확실하게 하기 위해)
+        this.bot.broadcast('spinRouletteResult', { selectedItem });
     }
 }

@@ -33,9 +33,20 @@ export class DrawManager {
     }
 
     public getState() {
+        // [New] 참여자 명단(닉네임) 포함
+        let participantsList: string[] = [];
+        if (this.currentSettings?.target === 'donation') {
+            participantsList = this.donationPool.map(d => `${d.nickname}(${d.amount})`);
+        } else {
+            participantsList = Array.from(this.participants).map(p => {
+                try { return JSON.parse(p).nick; } catch(e) { return 'Unknown'; }
+            });
+        }
+
         return {
             isCollecting: this.isCollecting,
-            participantCount: this.currentSettings?.target === 'donation' ? this.donationPool.length : this.participants.size,
+            participantCount: participantsList.length,
+            participantsList: participantsList.slice(-50), // 최신 50명만 전송 (데이터 절약)
             settings: this.currentSettings,
             status: this.drawStatus,
             winners: this.winners
@@ -55,23 +66,40 @@ export class DrawManager {
             this.loadDonors(settings.minAmount || 0);
         }
 
-        // [New] 채팅 알림
+        // [New] 상세 채팅 알림 로직
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-            let msg = `📢 [추첨 시작] ${settings.winnerCount}명을 뽑습니다!`;
-            let subMsg = '';
+            let title = `📢 [추첨 시작] ${settings.winnerCount}명을 추첨합니다!`;
+            let guide = "";
 
-            if (settings.target === 'chat') {
-                subMsg = `👉 채팅창에 '${settings.command || '!참여'}'를 입력하세요!`;
-            } else if (settings.target === 'all') {
-                subMsg = `👉 채팅을 입력하면 자동으로 참여됩니다!`;
-            } else if (settings.target === 'subscriber') {
-                subMsg = `👉 채팅을 입력하면 참여됩니다! (⭐구독자 전용)`;
-            } else if (settings.target === 'donation') {
-                subMsg = `👉 ${settings.minAmount}원 이상 후원하신 분들 대상입니다!`;
+            switch (settings.target) {
+                case 'chat':
+                    if (settings.command) {
+                        guide = `👉 채팅창에 '${settings.command}'를 입력하여 참여하세요!`;
+                    } else {
+                        guide = `👉 채팅을 입력하면 자동으로 참여됩니다!`;
+                    }
+                    if (this.currentSettings.target === 'subscriber') { 
+                        // settings.target이 chat인데 subscriberOnly 플래그가 따로 있는 경우 처리 필요
+                        // 하지만 타입 정의상 target이 'subscriber'일 수도 있음. 
+                    }
+                    break;
+                case 'subscriber':
+                    guide = `👉 (구독자 전용) 채팅을 입력하여 참여하세요!`;
+                    break;
+                case 'all':
+                    guide = `👉 현재 시청 중인 모든 분들이 대상입니다!`;
+                    break;
+                case 'donation':
+                    if (settings.minAmount && settings.minAmount > 0) {
+                        guide = `👉 이번 추첨은 ${settings.minAmount}원 이상 후원해주신 분들 대상입니다!`;
+                    } else {
+                        guide = `👉 이번 추첨은 모든 후원자 분들 대상입니다!`;
+                    }
+                    break;
             }
 
-            this.bot.chat.sendChat(msg);
-            if (subMsg) this.bot.chat.sendChat(subMsg);
+            this.bot.chat.sendChat(title);
+            if (guide) this.bot.chat.sendChat(guide);
         }
 
         this.notify();
