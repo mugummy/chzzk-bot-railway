@@ -161,6 +161,7 @@ wss.on('connection', async (ws, req) => {
                     break;
                 
                 case 'startDraw': bot.draw.startDraw(data.settings); break;
+                case 'stopDraw': bot.draw.stopDraw(); break; // [New]
                 case 'pickWinners': await bot.draw.pickWinners(); break;
                 case 'resetDraw': bot.draw.resetDraw(); break;
                 

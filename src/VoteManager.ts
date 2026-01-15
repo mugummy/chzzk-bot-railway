@@ -84,11 +84,15 @@ export class VoteManager {
         this.currentVote.status = 'active';
         await supabase.from('votes').update({ status: 'active' }).eq('id', this.currentVote.id);
         
-        // [New] 상세 채팅 알림
+        // [Fix] 상세 채팅 알림
         if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
             const modeText = this.currentVote.mode === 'normal' ? '일반 투표(1인 1표)' : '후원 투표(금액 비례)';
-            // options 배열의 각 객체에서 label을 추출해야 함
-            const optionsText = this.currentVote.options.map((o: any, i: number) => `${i+1}. ${o.label || o}`).join(' / ');
+            
+            // options가 문자열 배열일 수도, 객체 배열일 수도 있음. 방어 코드 추가.
+            const optionsText = this.currentVote.options.map((o: any, i: number) => {
+                const label = typeof o === 'string' ? o : (o.label || '항목');
+                return `${i+1}. ${label}`;
+            }).join(' / ');
             
             this.bot.chat.sendChat(`📢 [투표 시작] ${this.currentVote.title}`);
             this.bot.chat.sendChat(`📌 방식: ${modeText}`);
