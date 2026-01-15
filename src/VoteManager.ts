@@ -42,13 +42,19 @@ export class VoteManager {
 
     // 투표 생성
     public async createVote(title: string, options: string[], mode: 'normal' | 'donation' = 'normal') {
+        console.log(`[VoteManager] Creating vote: ${title} (${mode}) for ${this.bot.getChannelId()}`);
+        
         const { data: voteData, error } = await supabase
             .from('votes')
             .insert({ channel_id: this.bot.getChannelId(), title, mode, status: 'ready' })
             .select()
             .single();
 
-        if (error || !voteData) throw new Error('투표 생성 실패');
+        if (error) {
+            console.error('[VoteManager] DB Error:', error);
+            throw new Error(`투표 생성 실패: ${error.message}`);
+        }
+        if (!voteData) throw new Error('투표 생성 실패: 데이터 없음');
 
         const optionInserts = options.map(label => ({
             vote_id: voteData.id,
