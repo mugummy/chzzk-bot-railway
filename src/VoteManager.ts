@@ -243,14 +243,15 @@ export class VoteManager {
         // [New] !투표 단독 입력 시 도움말 또는 현재 상태
         if (msg === '!투표') {
             if (this.currentVote && this.currentVote.status === 'active') {
-                const optionsText = this.currentVote.options.map((o, i) => `${i+1}. ${o.label}`).join(' / ');
+                const optionsText = this.currentVote.options.map((o: any, i: number) => `${i+1}. ${o.label}`).join(' / ');
                 this.bot.chat?.sendChat(`📢 [진행 중] ${this.currentVote.title}`);
                 this.bot.chat?.sendChat(`📝 항목: ${optionsText}`);
                 this.bot.chat?.sendChat(`👉 참여 방법: '!투표 번호' (예: !투표 1)`);
             } else {
                 this.bot.chat?.sendChat(`🗳️ [투표 도움말]`);
-                this.bot.chat?.sendChat(`현재 진행 중인 투표가 없습니다.`);
-                this.bot.chat?.sendChat(`스트리머가 투표를 시작하면 '!투표 번호'로 참여할 수 있습니다.`);
+                this.bot.chat?.sendChat(`- 현재 진행 중인 투표가 없습니다.`);
+                this.bot.chat?.sendChat(`- 스트리머가 투표를 시작하면 '!투표 [번호]'로 참여할 수 있습니다.`);
+                this.bot.chat?.sendChat(`- 예시: 1번 항목에 투표하려면 '!투표 1' 입력`);
             }
             return;
         }

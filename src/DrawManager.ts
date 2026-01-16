@@ -127,15 +127,37 @@ export class DrawManager {
         this.notify();
     }
 
-    // 채팅 이벤트 핸들링 (참여 명령어)
+    // 채팅 이벤트 핸들링 (참여 명령어 및 도움말)
     public handleChat(chat: ChatEvent) {
+        const msg = chat.message.trim();
+        
+        // [New] !추첨 도움말
+        if (msg === '!추첨') {
+            if (this.isCollecting && this.currentSettings) {
+                const count = this.currentSettings.winnerCount;
+                let guide = "";
+                if (this.currentSettings.target === 'chat') guide = `명령어: ${this.currentSettings.command || '!참여'}`;
+                else if (this.currentSettings.target === 'donation') guide = `대상: ${this.currentSettings.minAmount}원 이상 후원`;
+                else guide = "대상: 전체 시청자 채팅";
+                
+                this.bot.chat?.sendChat(`🎁 [추첨 진행 중] ${count}명 추첨!`);
+                this.bot.chat?.sendChat(`👉 ${guide}`);
+                this.bot.chat?.sendChat(`현재 참여자: ${this.participants.size + this.donationPool.length}명`);
+            } else {
+                this.bot.chat?.sendChat(`🎁 [추첨 도움말]`);
+                this.bot.chat?.sendChat(`- 현재 진행 중인 추첨이 없습니다.`);
+                this.bot.chat?.sendChat(`- 추첨이 시작되면 안내에 따라 참여해주세요!`);
+            }
+            return;
+        }
+
         if (!this.isCollecting || !this.currentSettings) return;
         if (this.currentSettings.target !== 'chat') return;
 
         const cmd = this.currentSettings.command || '!참여';
-        if (chat.message.trim() === cmd) {
+        if (msg === cmd) {
             this.participants.add(JSON.stringify({ id: chat.profile.userIdHash, nick: chat.profile.nickname }));
-            this.notify(); // 실시간 인원 수 업데이트
+            this.notify(); 
         }
     }
 

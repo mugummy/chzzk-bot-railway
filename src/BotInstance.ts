@@ -134,24 +134,33 @@ export class BotInstance {
         if (!this.chat) return;
         const s = this.settings.getSettings();
         
-        // 1. 커스텀 명령어 목록 가져오기
-        const customCmds = this.commands.getCommands()
+        // 1. 커스텀 명령어 목록 가져오기 (디버깅 로그 추가 가능)
+        const allCmds = this.commands.getCommands();
+        const customCmds = allCmds
             .filter(c => c.enabled)
-            .map(c => c.triggers[0])
+            .map(c => c.triggers[0]) // 첫 번째 트리거만 표시
+            .filter(t => t) // 빈 트리거 제외
             .join(', ');
 
         // 2. 활성화된 기본 기능 목록
         const basicCmds = [];
         if (s.songRequestMode !== 'off') basicCmds.push('!노래');
-        if (s.chatEnabled) basicCmds.push('!투표', '!추첨'); // 투표/추첨은 항상 로드됨
-        if (s.participationCommand) basicCmds.push(s.participationCommand);
+        if (s.chatEnabled) {
+            basicCmds.push('!투표');
+            basicCmds.push('!추첨'); 
+        }
+        if (s.participationCommand) basicCmds.push(s.participationCommand); // 예: !시참
         if (s.pointsEnabled) basicCmds.push('!포인트');
 
         // 3. 메시지 전송
-        await this.chat.sendChat(`🤖 [명령어 목록]`);
-        if (customCmds) await this.chat.sendChat(`📌 채널 명령어: ${customCmds}`);
+        await this.chat.sendChat(`🤖 [무거미 봇 명령어]`);
+        if (customCmds.length > 0) {
+            await this.chat.sendChat(`📌 채널 명령어: ${customCmds}`);
+        } else {
+            await this.chat.sendChat(`📌 채널 명령어: (없음)`);
+        }
         await this.chat.sendChat(`🔧 기본 기능: ${basicCmds.join(', ')}`);
-        await this.chat.sendChat(`💡 상세 사용법은 해당 명령어를 입력해보세요! (예: !노래)`);
+        await this.chat.sendChat(`💡 상세 사용법은 해당 명령어를 입력해보세요! (예: !투표, !추첨)`);
     }
 
     private async handleDonation(donation: DonationEvent) {
