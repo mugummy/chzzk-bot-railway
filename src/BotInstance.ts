@@ -113,6 +113,13 @@ export class BotInstance {
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
+            
+            // [New] 통합 명령어 가이드
+            if (msg === '!도움말' || msg === '!명령어') {
+                await this.sendHelpGuide();
+                return;
+            }
+
             if (msg.startsWith('!')) {
                 const cmd = msg.split(' ')[0];
                 if (cmd === '!노래') await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
@@ -121,6 +128,30 @@ export class BotInstance {
             if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
             else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
         }
+    }
+
+    private async sendHelpGuide() {
+        if (!this.chat) return;
+        const s = this.settings.getSettings();
+        
+        // 1. 커스텀 명령어 목록 가져오기
+        const customCmds = this.commands.getCommands()
+            .filter(c => c.enabled)
+            .map(c => c.triggers[0])
+            .join(', ');
+
+        // 2. 활성화된 기본 기능 목록
+        const basicCmds = [];
+        if (s.songRequestMode !== 'off') basicCmds.push('!노래');
+        if (s.chatEnabled) basicCmds.push('!투표', '!추첨'); // 투표/추첨은 항상 로드됨
+        if (s.participationCommand) basicCmds.push(s.participationCommand);
+        if (s.pointsEnabled) basicCmds.push('!포인트');
+
+        // 3. 메시지 전송
+        await this.chat.sendChat(`🤖 [명령어 목록]`);
+        if (customCmds) await this.chat.sendChat(`📌 채널 명령어: ${customCmds}`);
+        await this.chat.sendChat(`🔧 기본 기능: ${basicCmds.join(', ')}`);
+        await this.chat.sendChat(`💡 상세 사용법은 해당 명령어를 입력해보세요! (예: !노래)`);
     }
 
     private async handleDonation(donation: DonationEvent) {
