@@ -221,8 +221,9 @@ export class VoteManager {
                 // 최다 득표 항목들 (동점자 포함)
                 targetOptionIds = sortedOptions.filter((o: any) => o.count === maxCount).map((o: any) => o.id);
             } else if (filter === 'lose') {
-                // 나머지 항목들
-                targetOptionIds = sortedOptions.filter((o: any) => o.count < maxCount).map((o: any) => o.id);
+                // [Fix] 최소 득표 항목들 (꼴등)
+                const minCount = sortedOptions[sortedOptions.length - 1].count;
+                targetOptionIds = sortedOptions.filter((o: any) => o.count === minCount).map((o: any) => o.id);
             }
         }
 
@@ -271,14 +272,16 @@ export class VoteManager {
         if (msg === '!투표') {
             if (this.currentVote && this.currentVote.status === 'active') {
                 const optionsText = this.currentVote.options.map((o: any, i: number) => `${i+1}. ${o.label}`).join(' / ');
-                this.bot.chat?.sendChat(`📢 [진행 중] ${this.currentVote.title}`);
-                this.bot.chat?.sendChat(`📝 항목: ${optionsText}`);
-                this.bot.chat?.sendChat(`👉 참여 방법: '!투표 번호' (예: !투표 1)`);
+                const msg = `📢 [진행 중] ${this.currentVote.title}\n` +
+                            `📝 항목: ${optionsText}\n` +
+                            `👉 참여 방법: '!투표 번호' (예: !투표 1)`;
+                this.bot.chat?.sendChat(msg);
             } else {
-                this.bot.chat?.sendChat(`🗳️ [투표 도움말]`);
-                this.bot.chat?.sendChat(`- 현재 진행 중인 투표가 없습니다.`);
-                this.bot.chat?.sendChat(`- 스트리머가 투표를 시작하면 '!투표 [번호]'로 참여할 수 있습니다.`);
-                this.bot.chat?.sendChat(`- 예시: 1번 항목에 투표하려면 '!투표 1' 입력`);
+                const msg = `🗳️ [투표 도움말]\n` +
+                            `- 현재 진행 중인 투표가 없습니다.\n` +
+                            `- 스트리머가 투표를 시작하면 '!투표 [번호]'로 참여할 수 있습니다.\n` +
+                            `- 예시: 1번 항목에 투표하려면 '!투표 1' 입력`;
+                this.bot.chat?.sendChat(msg);
             }
             return;
         }
