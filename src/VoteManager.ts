@@ -14,7 +14,8 @@ export interface Vote {
     status: 'ready' | 'active' | 'ended';
     mode: 'normal' | 'donation';
     options: VoteOption[];
-    totalParticipants: number;
+    totalParticipants: number;  // 참여 인원 수
+    totalVotes: number;         // 총 투표 수 (일반: 인원수, 후원: 금액 합계)
 }
 
 export class VoteManager {
@@ -49,12 +50,13 @@ export class VoteManager {
         const tempId = `vote_${Date.now()}`;
         
         this.currentVote = {
-            id: tempId, 
+            id: tempId,
             title,
             status: 'ready',
             mode,
             options: options.map((label, i) => ({ id: `opt_${i}`, label: String(label), count: 0 })),
-            totalParticipants: 0
+            totalParticipants: 0,
+            totalVotes: 0
         };
         
         this.notify();
@@ -313,6 +315,7 @@ export class VoteManager {
 
         option.count++;
         this.currentVote.totalParticipants++;
+        this.currentVote.totalVotes++;
         await supabase.rpc('increment_vote_option', { row_id: option.id, x: 1 });
         this.notify();
     }
@@ -340,7 +343,8 @@ export class VoteManager {
         });
 
         option.count += amount;
-        this.currentVote.totalParticipants++; 
+        this.currentVote.totalParticipants++;
+        this.currentVote.totalVotes += amount;
         await supabase.rpc('increment_vote_option', { row_id: option.id, x: amount });
         this.notify();
     }

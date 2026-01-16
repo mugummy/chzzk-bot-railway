@@ -155,7 +155,10 @@ wss.on('connection', async (ws, req) => {
                     break;
                 
                 // [New Feature Handlers]
-                case 'createVote': await bot.vote.createVote(data.title, data.options, data.mode); break;
+                case 'createVote':
+                    await bot.vote.createVote(data.title, data.options, data.mode);
+                    if (data.autoStart) await bot.vote.startVote();
+                    break;
                 case 'startVote': await bot.vote.startVote(); break;
                 case 'endVote': await bot.vote.endVote(); break;
                 case 'deleteVote': await bot.vote.deleteVote(data.voteId); break;
