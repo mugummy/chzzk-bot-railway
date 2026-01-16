@@ -44,48 +44,62 @@ export class VoteManager {
     public async createVote(title: string, options: string[], mode: 'normal' | 'donation' = 'normal') {
         console.log(`[VoteManager] Creating vote: ${title}, Options: ${JSON.stringify(options)}`);
         
-        const { data: voteData, error } = await supabase
-            .from('votes')
-            .insert({ channel_id: this.bot.getChannelId(), title, mode, status: 'ready' })
-            .select()
-            .single();
+        try {
+            const { data: voteData, error } = await supabase
+                .from('votes')
+                .insert({ channel_id: this.bot.getChannelId(), title, mode, status: 'ready' })
+                .select()
+                .single();
 
-        if (error) {
-            console.error('[VoteManager] DB Error:', error);
-            throw new Error(`투표 생성 실패: ${error.message}`);
+            if (error) {
+                console.error('[VoteManager] Vote DB Error:', error);
+                // 스키마 에러일 경우 사용자에게 알림 필요
+                throw new Error(`투표 생성 DB 에러: ${error.message}`);
+            }
+            if (!voteData) throw new Error('투표 생성 실패: 데이터 없음');
+
+            // 옵션 데이터 준비
+            const optionInserts = options.map(label => ({
+                vote_id: voteData.id,
+                label: String(label), 
+                count: 0
+            }));
+
+            let optionsData = [];
+            try {
+                const { data, error: optError } = await supabase
+                    .from('vote_options')
+                    .insert(optionInserts)
+                    .select();
+                
+                if (optError) throw optError;
+                optionsData = data || [];
+            } catch (optErr: any) {
+                console.error('[VoteManager] Option Insert Error:', optErr);
+                // 테이블이 없거나 스키마 문제일 경우, 메모리 상에서라도 동작하도록 함
+                if (optErr.code === 'PGRST205') {
+                    console.warn('[VoteManager] !! 중요 !!: vote_options 테이블을 찾을 수 없습니다. Supabase에서 "NOTIFY pgrst, \'reload schema\';"를 실행해주세요.');
+                }
+            }
+
+            // DB 리턴값 혹은 입력값 기반으로 초기화
+            this.currentVote = {
+                id: voteData.id,
+                title: voteData.title,
+                status: 'ready',
+                mode: voteData.mode,
+                options: (optionsData.length > 0) 
+                    ? optionsData.map((o: any) => ({ id: o.id, label: o.label, count: 0 }))
+                    : options.map((label, i) => ({ id: `temp_${i}`, label: String(label), count: 0 })),
+                totalParticipants: 0
+            };
+            
+            this.notify();
+
+        } catch (err) {
+            console.error('[VoteManager] Critical Error in createVote:', err);
+            // 에러를 던지지 않고 로그만 남겨서 서버 크래시 방지
         }
-        if (!voteData) throw new Error('투표 생성 실패: 데이터 없음');
-
-        // 옵션 데이터 준비
-        const optionInserts = options.map(label => ({
-            vote_id: voteData.id,
-            label: String(label), 
-            count: 0
-        }));
-
-        const { data: optionsData, error: optError } = await supabase
-            .from('vote_options')
-            .insert(optionInserts)
-            .select();
-
-        if (optError) {
-            console.error('[VoteManager] Option Insert Error:', optError);
-        }
-
-        // [Fix] DB 리턴값(optionsData)이 비어있을 수 있으므로, 입력받은 options를 기반으로 초기화 보장
-        this.currentVote = {
-            id: voteData.id,
-            title: voteData.title,
-            status: 'ready',
-            mode: voteData.mode,
-            // id는 DB에서 생성되므로 optionsData가 있으면 쓰고, 없으면 임시 ID 사용 (렌더링 문제 방지)
-            options: (optionsData && optionsData.length > 0) 
-                ? optionsData.map(o => ({ id: o.id, label: o.label, count: 0 }))
-                : options.map((label, i) => ({ id: `temp_${i}`, label: String(label), count: 0 })),
-            totalParticipants: 0
-        };
-        
-        this.notify();
     }
 
     // 투표 시작
