@@ -60,26 +60,35 @@ wss.on('connection', async (ws, req) => {
 
     const sendFullState = async (bot: any) => {
         if (!bot) return;
+        
         try { await bot.refreshLiveInfo(); } catch(e) {}
+        
+        const safeSend = (type: string, payload: any) => {
+            try { ws.send(JSON.stringify({ type, payload })); } catch(e) { console.error(`Failed to send ${type}`, e); }
+        };
+
+        // [Fix] connectResult는 가장 먼저, 무조건 보냄
         ws.send(JSON.stringify({ type: 'connectResult', success: true, channelInfo: bot.getChannelInfo(), liveStatus: bot.getLiveStatus() }));
-        ws.send(JSON.stringify({ type: 'settingsUpdate', payload: bot.settings.getSettings() }));
-        ws.send(JSON.stringify({ type: 'commandsUpdate', payload: bot.commands.getCommands() }));
-        ws.send(JSON.stringify({ type: 'countersUpdate', payload: bot.counters.getCounters() }));
-        ws.send(JSON.stringify({ type: 'macrosUpdate', payload: bot.macros.getMacros() }));
-        ws.send(JSON.stringify({ type: 'songStateUpdate', payload: bot.songs.getState() }));
-        ws.send(JSON.stringify({ type: 'participationStateUpdate', payload: bot.participation.getState() }));
-        ws.send(JSON.stringify({ type: 'greetStateUpdate', payload: bot.greet.getState() }));
+
+        try { safeSend('settingsUpdate', bot.settings.getSettings()); } catch(e) {}
+        try { safeSend('commandsUpdate', bot.commands.getCommands()); } catch(e) {}
+        try { safeSend('countersUpdate', bot.counters.getCounters()); } catch(e) {}
+        try { safeSend('macrosUpdate', bot.macros.getMacros()); } catch(e) {}
+        try { safeSend('songStateUpdate', bot.songs.getState()); } catch(e) {}
+        try { safeSend('participationStateUpdate', bot.participation.getState()); } catch(e) {}
+        try { safeSend('greetStateUpdate', bot.greet.getState()); } catch(e) {}
         
         // [New Features State]
-        ws.send(JSON.stringify({ type: 'voteStateUpdate', payload: bot.vote.getState() }));
-        ws.send(JSON.stringify({ type: 'drawStateUpdate', payload: bot.draw.getState() }));
-        ws.send(JSON.stringify({ type: 'rouletteStateUpdate', payload: bot.roulette.getState() }));
-        ws.send(JSON.stringify({ type: 'overlayStateUpdate', payload: bot.overlayManager.getState() }));
+        try { safeSend('voteStateUpdate', bot.vote.getState()); } catch(e) {}
+        try { safeSend('drawStateUpdate', bot.draw.getState()); } catch(e) {}
+        try { safeSend('rouletteStateUpdate', bot.roulette.getState()); } catch(e) {}
+        try { safeSend('overlayStateUpdate', bot.overlayManager.getState()); } catch(e) {}
 
-        ws.send(JSON.stringify({ type: 'chatHistoryLoad', payload: channelChatHistory.get(channelId) || [] }));
+        try { safeSend('chatHistoryLoad', channelChatHistory.get(channelId) || []); } catch(e) {}
+        
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
-            ws.send(JSON.stringify({ type: 'participationRankingUpdate', payload: ranking }));
+            safeSend('participationRankingUpdate', ranking);
         } catch (e) {}
     };
 
