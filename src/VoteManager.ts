@@ -44,6 +44,23 @@ export class VoteManager {
     public async createVote(title: string, options: string[], mode: 'normal' | 'donation' = 'normal') {
         console.log(`[VoteManager] Creating vote: ${title}, Options: ${JSON.stringify(options)}`);
         
+        // 1. 메모리 객체 우선 생성 (UI 반응성 보장)
+        // 임시 ID 생성
+        const tempId = `vote_${Date.now()}`;
+        
+        this.currentVote = {
+            id: tempId, 
+            title,
+            status: 'ready',
+            mode,
+            options: options.map((label, i) => ({ id: `opt_${i}`, label: String(label), count: 0 })),
+            totalParticipants: 0
+        };
+        
+        // UI 즉시 갱신
+        this.notify();
+
+        // 2. DB 비동기 저장 (실패해도 UI는 유지)
         try {
             const { data: voteData, error } = await supabase
                 .from('votes')
@@ -51,54 +68,39 @@ export class VoteManager {
                 .select()
                 .single();
 
-            if (error) {
-                console.error('[VoteManager] Vote DB Error:', error);
-                // 스키마 에러일 경우 사용자에게 알림 필요
-                throw new Error(`투표 생성 DB 에러: ${error.message}`);
-            }
-            if (!voteData) throw new Error('투표 생성 실패: 데이터 없음');
+            if (error) throw error;
+            if (voteData) {
+                // DB ID로 교체
+                this.currentVote.id = voteData.id;
+                
+                const optionInserts = options.map(label => ({
+                    vote_id: voteData.id,
+                    label: String(label), 
+                    count: 0
+                }));
 
-            // 옵션 데이터 준비
-            const optionInserts = options.map(label => ({
-                vote_id: voteData.id,
-                label: String(label), 
-                count: 0
-            }));
-
-            let optionsData = [];
-            try {
-                const { data, error: optError } = await supabase
+                const { data: optionsData, error: optError } = await supabase
                     .from('vote_options')
                     .insert(optionInserts)
                     .select();
                 
-                if (optError) throw optError;
-                optionsData = data || [];
-            } catch (optErr: any) {
-                console.error('[VoteManager] Option Insert Error:', optErr);
-                // 테이블이 없거나 스키마 문제일 경우, 메모리 상에서라도 동작하도록 함
-                if (optErr.code === 'PGRST205') {
-                    console.warn('[VoteManager] !! 중요 !!: vote_options 테이블을 찾을 수 없습니다. Supabase에서 "NOTIFY pgrst, \'reload schema\';"를 실행해주세요.');
+                if (optError) console.error('[VoteManager] Option DB Error:', optError);
+                
+                // 옵션 ID 교체 (DB 데이터가 있으면)
+                if (optionsData && optionsData.length > 0) {
+                    this.currentVote.options = optionsData.map(o => ({ id: o.id, label: o.label, count: 0 }));
                 }
+                
+                // ID 교체 후 다시 알림
+                this.notify();
             }
-
-            // DB 리턴값 혹은 입력값 기반으로 초기화
-            this.currentVote = {
-                id: voteData.id,
-                title: voteData.title,
-                status: 'ready',
-                mode: voteData.mode,
-                options: (optionsData.length > 0) 
-                    ? optionsData.map((o: any) => ({ id: o.id, label: o.label, count: 0 }))
-                    : options.map((label, i) => ({ id: `temp_${i}`, label: String(label), count: 0 })),
-                totalParticipants: 0
-            };
-            
-            this.notify();
-
-        } catch (err) {
-            console.error('[VoteManager] Critical Error in createVote:', err);
-            // 에러를 던지지 않고 로그만 남겨서 서버 크래시 방지
+        } catch (err: any) {
+            console.error('[VoteManager] DB Error in createVote:', err);
+            // DB 저장이 실패했더라도 메모리 상태는 유지하여 봇이 죽거나 UI가 사라지지 않게 함
+            // 단, 서버 재시작 시 데이터는 날아감
+            if (err.code === 'PGRST205' || err.code === 'PGRST204') {
+                console.warn('[VoteManager] 스키마 캐시 문제로 DB 저장 실패. 메모리 모드로 동작합니다.');
+            }
         }
     }
 
