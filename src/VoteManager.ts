@@ -202,15 +202,42 @@ export class VoteManager {
         return votes || [];
     }
 
-    // [New] 투표 참여자 중 추첨
-    public async pickWinner(voteId: string, optionId: string | null, count: number) {
-        let query = supabase.from('vote_ballots').select('user_id_hash').eq('vote_id', voteId);
-        if (optionId) query = query.eq('option_id', optionId);
+    // [New] 투표 참여자 중 추첨 (필터 지원)
+    public async pickWinner(voteId: string, optionId: string | null, count: number, filter: 'all' | 'win' | 'lose' = 'all') {
+        // 1. 투표 정보 및 옵션 가져오기 (승자/패자 판별용)
+        const { data: vote } = await supabase.from('votes').select('*, vote_options(*)').eq('id', voteId).single();
+        if (!vote) return [];
+
+        let targetOptionIds: string[] = [];
+
+        if (filter === 'all') {
+            // 전체 대상
+        } else {
+            // 득표수 기준 정렬
+            const sortedOptions = vote.vote_options.sort((a: any, b: any) => b.count - a.count);
+            const maxCount = sortedOptions[0].count;
+            
+            if (filter === 'win') {
+                // 최다 득표 항목들 (동점자 포함)
+                targetOptionIds = sortedOptions.filter((o: any) => o.count === maxCount).map((o: any) => o.id);
+            } else if (filter === 'lose') {
+                // 나머지 항목들
+                targetOptionIds = sortedOptions.filter((o: any) => o.count < maxCount).map((o: any) => o.id);
+            }
+        }
+
+        // 2. 투표자 목록 가져오기
+        let query = supabase.from('vote_ballots').select('user_id_hash, option_id').eq('vote_id', voteId);
+        if (targetOptionIds.length > 0) {
+            query = query.in('option_id', targetOptionIds);
+        } else if (optionId) {
+            query = query.eq('option_id', optionId); // 특정 옵션 지정 시 (기존 호환)
+        }
         
         const { data: candidates } = await query;
         if (!candidates || candidates.length === 0) return [];
 
-        // 중복 제거
+        // 3. 추첨 (중복 제거)
         const uniqueUsers = Array.from(new Set(candidates.map(c => c.user_id_hash)));
         const winnersId = [];
         
@@ -221,7 +248,7 @@ export class VoteManager {
             uniqueUsers.splice(idx, 1);
         }
 
-        // 닉네임 조회
+        // 4. 닉네임 조회
         const { data: users } = await supabase
             .from('points')
             .select('user_id_hash, nickname')

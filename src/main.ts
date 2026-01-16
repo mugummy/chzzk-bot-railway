@@ -152,7 +152,7 @@ wss.on('connection', async (ws, req) => {
                 case 'deleteVote': await bot.vote.deleteVote(data.voteId); break;
                 case 'resetVote': await bot.vote.resetVote(); break;
                 case 'pickVoteWinner': 
-                    const winners = await bot.vote.pickWinner(data.voteId, data.optionId, data.count);
+                    const winners = await bot.vote.pickWinner(data.voteId, data.optionId, data.count, data.filter);
                     ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: winners }));
                     break;
                 case 'getBallots':
