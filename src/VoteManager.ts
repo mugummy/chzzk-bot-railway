@@ -157,16 +157,17 @@ export class VoteManager {
             
         if (!ballots) return [];
 
+        const userIds = ballots.map(b => b.user_id_hash);
         const { data: users } = await supabase
             .from('points')
             .select('user_id_hash, nickname')
-            .in('user_id_hash', ballots.map(b => b.user_id_hash));
+            .in('user_id_hash', userIds);
             
         const userMap = new Map(users?.map(u => [u.user_id_hash, u.nickname]) || []);
 
         return ballots.map(b => ({
             userIdHash: b.user_id_hash,
-            nickname: userMap.get(b.user_id_hash) || '익명',
+            nickname: userMap.get(b.user_id_hash) || `익명(${b.user_id_hash.substring(0,4)})`, // 닉네임 없으면 ID 일부 표시
             amount: b.amount,
             optionId: b.option_id,
             timestamp: b.created_at
@@ -175,10 +176,9 @@ export class VoteManager {
 
     // [New] 투표 기록 가져오기
     public async getVoteHistory() {
-        // vote_options 조인은 데이터가 많아질 수 있으므로 목록 조회에선 제외
         const { data: votes, error } = await supabase
             .from('votes')
-            .select('*')
+            .select('*') // 옵션 조인 없이 가볍게
             .eq('channel_id', this.bot.getChannelId())
             .eq('status', 'ended')
             .order('created_at', { ascending: false })
@@ -198,12 +198,12 @@ export class VoteManager {
 
         // 중복 제거
         const uniqueUsers = Array.from(new Set(candidates.map(c => c.user_id_hash)));
-        const winners = [];
+        const winnersId = [];
         
         for (let i = 0; i < count; i++) {
             if (uniqueUsers.length === 0) break;
             const idx = Math.floor(Math.random() * uniqueUsers.length);
-            winners.push(uniqueUsers[idx]);
+            winnersId.push(uniqueUsers[idx]);
             uniqueUsers.splice(idx, 1);
         }
 
@@ -211,9 +211,14 @@ export class VoteManager {
         const { data: users } = await supabase
             .from('points')
             .select('user_id_hash, nickname')
-            .in('user_id_hash', winners);
+            .in('user_id_hash', winnersId);
             
-        return users || [];
+        const userMap = new Map(users?.map(u => [u.user_id_hash, u.nickname]) || []);
+        
+        return winnersId.map(id => ({
+            userIdHash: id,
+            nickname: userMap.get(id) || `익명(${id.substring(0,4)})`
+        }));
     }
 
     // 채팅으로 투표 참여 (!투표 1)
