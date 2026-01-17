@@ -171,6 +171,10 @@ wss.on('connection', async (ws, req) => {
                     const ballots = await bot.vote.getBallots(data.voteId);
                     ws.send(JSON.stringify({ type: 'voteBallotsResponse', payload: ballots }));
                     break;
+                case 'getVoteHistory':
+                    const history = await bot.vote.getVoteHistory();
+                    ws.send(JSON.stringify({ type: 'voteHistoryResponse', payload: history }));
+                    break;
                 
                 case 'startDraw': bot.draw.startDraw(data.settings); break;
                 case 'stopDraw': bot.draw.stopDraw(); break; // [New]
