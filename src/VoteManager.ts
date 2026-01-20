@@ -1,351 +1,323 @@
 import { ChatEvent, DonationEvent } from 'chzzk';
-import { BotInstance } from './BotInstance';
 import { supabase } from './supabase';
 
-export interface VoteOption {
+interface VoteOption {
     id: string;
     label: string;
+    position: number;
     count: number;
+    voters: { odHash: string; nickname: string; weight: number }[];
 }
 
-export interface Vote {
+interface VoteSession {
     id: string;
     title: string;
-    status: 'ready' | 'active' | 'ended';
-    mode: 'normal' | 'donation';
+    status: 'pending' | 'active' | 'ended';
+    mode: 'chat' | 'donation';
+    allowMultiple: boolean;
     options: VoteOption[];
-    totalParticipants: number;  // 참여 인원 수
-    totalVotes: number;         // 총 투표 수 (일반: 인원수, 후원: 금액 합계)
+    totalVotes: number;
+    createdAt: string;
+    startedAt?: string;
+    endedAt?: string;
 }
 
 export class VoteManager {
-    private currentVote: Vote | null = null;
-    private endedVotes: Vote[] = []; // [New] 메모리 기록 보관용
+    private bot: any;
+    private channelId: string;
+    private currentVote: VoteSession | null = null;
+    private votedUsers: Set<string> = new Set();
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(private bot: BotInstance) {}
+    constructor(bot: any) {
+        this.bot = bot;
+        this.channelId = bot.getChannelId();
+        this.loadActiveVote();
+    }
 
-    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
+    setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
     private notify() {
         this.onStateChangeCallback('voteStateUpdate', this.getState());
-        this.bot.overlayManager?.updateOverlay('vote', this.currentVote);
     }
 
-    public getState() {
-        return { currentVote: this.currentVote };
-    }
+    getState() {
+        if (!this.currentVote) {
+            return { currentVote: null };
+        }
 
-    public setCurrentVote(vote: Vote | null) {
-        this.currentVote = vote;
-    }
+        const sortedOptions = [...this.currentVote.options].sort((a, b) => b.count - a.count);
+        const maxCount = Math.max(...sortedOptions.map(o => o.count), 1);
 
-    // 투표 생성
-    public async createVote(title: string, options: string[], mode: 'normal' | 'donation' = 'normal') {
-        console.log(`[VoteManager] Creating vote: ${title}, Options: ${JSON.stringify(options)}`);
-        
-        // 1. 메모리 객체 우선 생성 (UI 반응성 보장)
-        const tempId = `vote_${Date.now()}`;
-        
-        this.currentVote = {
-            id: tempId,
-            title,
-            status: 'ready',
-            mode,
-            options: options.map((label, i) => ({ id: `opt_${i}`, label: String(label), count: 0 })),
-            totalParticipants: 0,
-            totalVotes: 0
+        return {
+            currentVote: {
+                ...this.currentVote,
+                options: sortedOptions.map(opt => ({
+                    ...opt,
+                    percent: this.currentVote!.totalVotes > 0
+                        ? ((opt.count / this.currentVote!.totalVotes) * 100).toFixed(1)
+                        : '0.0',
+                    barPercent: (opt.count / maxCount) * 100
+                }))
+            }
         };
-        
-        this.notify();
+    }
 
-        // 2. DB 비동기 저장
+    private async loadActiveVote() {
         try {
-            const { data: voteData, error } = await supabase
+            const { data: vote } = await supabase
                 .from('votes')
-                .insert({ channel_id: this.bot.getChannelId(), title, mode, status: 'ready' })
+                .select('*')
+                .eq('channel_id', this.channelId)
+                .eq('status', 'active')
+                .single();
+
+            if (vote) {
+                const { data: options } = await supabase
+                    .from('vote_options')
+                    .select('*')
+                    .eq('vote_id', vote.id)
+                    .order('position');
+
+                const { data: ballots } = await supabase
+                    .from('vote_ballots')
+                    .select('*')
+                    .eq('vote_id', vote.id);
+
+                const optionsWithVotes: VoteOption[] = (options || []).map(opt => {
+                    const optBallots = (ballots || []).filter(b => b.option_id === opt.id);
+                    return {
+                        id: opt.id,
+                        label: opt.label,
+                        position: opt.position,
+                        count: optBallots.reduce((sum, b) => sum + b.weight, 0),
+                        voters: optBallots.map(b => ({ odHash: b.user_id_hash, nickname: b.nickname, weight: b.weight }))
+                    };
+                });
+
+                this.currentVote = {
+                    id: vote.id,
+                    title: vote.title,
+                    status: vote.status,
+                    mode: vote.mode,
+                    allowMultiple: vote.allow_multiple,
+                    options: optionsWithVotes,
+                    totalVotes: optionsWithVotes.reduce((sum, o) => sum + o.count, 0),
+                    createdAt: vote.created_at,
+                    startedAt: vote.started_at,
+                    endedAt: vote.ended_at
+                };
+
+                this.votedUsers = new Set((ballots || []).map(b => b.user_id_hash));
+            }
+        } catch (e) {
+            console.error('[VoteManager] Failed to load active vote:', e);
+        }
+    }
+
+    async createVote(title: string, optionLabels: string[], mode: 'chat' | 'donation' = 'chat', allowMultiple: boolean = false) {
+        try {
+            // End any existing active vote
+            if (this.currentVote && this.currentVote.status === 'active') {
+                await this.endVote();
+            }
+
+            const { data: vote, error: voteError } = await supabase
+                .from('votes')
+                .insert({
+                    channel_id: this.channelId,
+                    title,
+                    status: 'pending',
+                    mode,
+                    allow_multiple: allowMultiple
+                })
                 .select()
                 .single();
 
-            if (error) throw error;
-            if (voteData) {
-                this.currentVote.id = voteData.id;
-                
-                const optionInserts = options.map(label => ({
-                    vote_id: voteData.id,
-                    label: String(label), 
-                    count: 0
-                }));
+            if (voteError || !vote) throw voteError;
 
-                const { data: optionsData, error: optError } = await supabase
-                    .from('vote_options')
-                    .insert(optionInserts)
-                    .select();
-                
-                if (optError) console.error('[VoteManager] Option DB Error:', optError);
-                
-                if (optionsData && optionsData.length > 0) {
-                    this.currentVote.options = optionsData.map(o => ({ id: o.id, label: o.label, count: 0 }));
-                }
-                
-                this.notify();
-            }
-        } catch (err: any) {
-            console.error('[VoteManager] DB Error in createVote:', err);
-            if (err.code === 'PGRST205' || err.code === 'PGRST204') {
-                console.warn('[VoteManager] 스키마 캐시 문제로 DB 저장 실패. 메모리 모드로 동작합니다.');
-            }
+            const optionsToInsert = optionLabels.map((label, idx) => ({
+                vote_id: vote.id,
+                label,
+                position: idx + 1
+            }));
+
+            const { data: options, error: optError } = await supabase
+                .from('vote_options')
+                .insert(optionsToInsert)
+                .select();
+
+            if (optError) throw optError;
+
+            this.currentVote = {
+                id: vote.id,
+                title: vote.title,
+                status: 'pending',
+                mode,
+                allowMultiple,
+                options: (options || []).map(opt => ({
+                    id: opt.id,
+                    label: opt.label,
+                    position: opt.position,
+                    count: 0,
+                    voters: []
+                })),
+                totalVotes: 0,
+                createdAt: vote.created_at
+            };
+
+            this.votedUsers.clear();
+            this.notify();
+            return this.currentVote;
+        } catch (e) {
+            console.error('[VoteManager] Failed to create vote:', e);
+            throw e;
         }
     }
 
-    // 투표 시작
-    public async startVote() {
-        if (!this.currentVote) return;
-        this.currentVote.status = 'active';
-        await supabase.from('votes').update({ status: 'active' }).eq('id', this.currentVote.id);
-        
-        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-            const modeText = this.currentVote.mode === 'normal' ? '일반 투표(1인 1표)' : '후원 투표(금액 비례)';
-            const optionsText = this.currentVote.options.map((o: any, i: number) => {
-                const label = typeof o === 'string' ? o : (o.label || '항목');
-                return `${i+1}. ${label}`;
-            }).join(' / ');
-            
-            const msg = `📢 [진행 중] ${this.currentVote.title}\n` + 
-                        `📝 항목: ${optionsText}\n` + 
-                        `👉 참여 방법: '!투표 번호' (예: !투표 1)`;
-            this.bot.chat.sendChat(msg);
-        }
-        
-        this.notify();
-    }
+    async startVote() {
+        if (!this.currentVote || this.currentVote.status === 'active') return;
 
-    // 투표 종료
-    public async endVote() {
-        if (!this.currentVote) return;
-        this.currentVote.status = 'ended';
-        
-        // 1. DB 업데이트 시도
         try {
-            await supabase.from('votes').update({ status: 'ended', ended_at: new Date().toISOString() }).eq('id', this.currentVote.id);
-        } catch(e) { console.error('EndVote DB Error:', e); }
-
-        // 2. 메모리 기록에 저장
-        if (!this.endedVotes.find(v => v.id === this.currentVote?.id)) {
-            this.endedVotes.unshift({ ...this.currentVote });
-        }
-        
-        // 채팅 알림
-        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-            this.bot.chat.sendChat(`🛑 [투표 마감] '${this.currentVote.title}' 투표가 종료되었습니다.`);
-            
-            if ((this.currentVote.totalParticipants || 0) > 0 && this.currentVote.options.length > 0) {
-                const topOption = this.currentVote.options.reduce((prev, current) => (prev.count > current.count) ? prev : current);
-                this.bot.chat.sendChat(`🏆 최다 득표: ${topOption.label} (${topOption.count}표)`);
-            } else {
-                this.bot.chat.sendChat(`💨 참여자가 없어 결과가 없습니다.`);
-            }
-        }
-
-        this.notify();
-    }
-
-    // 투표 초기화
-    public async resetVote() {
-        this.currentVote = null;
-        this.bot.overlayManager?.setView('none');
-        this.notify();
-    }
-
-    // 투표 삭제
-    public async deleteVote(voteId: string) {
-        await supabase.from('votes').delete().eq('id', voteId);
-        if (this.currentVote?.id === voteId) {
-            this.currentVote = null;
-        }
-        this.endedVotes = this.endedVotes.filter(v => v.id !== voteId);
-        this.notify();
-    }
-
-    // 투표자 명단 가져오기
-    public async getBallots(voteId: string) {
-        const { data: ballots } = await supabase
-            .from('vote_ballots')
-            .select(`user_id_hash, amount, created_at, option_id`)
-            .eq('vote_id', voteId);
-            
-        if (!ballots) return [];
-
-        const userIds = ballots.map(b => b.user_id_hash);
-        const { data: users } = await supabase
-            .from('points')
-            .select('user_id_hash, nickname')
-            .in('user_id_hash', userIds);
-            
-        const userMap = new Map(users?.map(u => [u.user_id_hash, u.nickname]) || []);
-
-        return ballots.map(b => ({
-            userIdHash: b.user_id_hash,
-            nickname: userMap.get(b.user_id_hash) || `익명(${b.user_id_hash.substring(0,4)})`,
-            amount: b.amount,
-            optionId: b.option_id,
-            timestamp: b.created_at
-        }));
-    }
-
-    // 투표 기록 가져오기 (DB + 메모리 병합)
-    public async getVoteHistory() {
-        let dbVotes: any[] = [];
-        try {
-            const { data, error } = await supabase
+            await supabase
                 .from('votes')
-                .select('*')
-                .eq('channel_id', this.bot.getChannelId())
-                .eq('status', 'ended')
-                .order('created_at', { ascending: false })
-                .limit(20);
-            if (!error && data) dbVotes = data;
-        } catch(e) {}
+                .update({ status: 'active', started_at: new Date().toISOString() })
+                .eq('id', this.currentVote.id);
 
-        const dbIds = new Set(dbVotes.map(v => v.id));
-        const missingInMemory = this.endedVotes.filter(v => !dbIds.has(v.id));
-        
-        return [...missingInMemory, ...dbVotes];
-    }
+            this.currentVote.status = 'active';
+            this.currentVote.startedAt = new Date().toISOString();
+            this.notify();
 
-    // 투표 참여자 중 추첨 (필터 지원)
-    public async pickWinner(voteId: string, optionId: string | null, count: number, filter: 'all' | 'win' | 'lose' = 'all') {
-        // 1. 투표 정보 및 옵션 가져오기 (승자/패자 판별용)
-        // 메모리에 있으면 메모리 우선
-        let vote: any = this.currentVote?.id === voteId ? this.currentVote : this.endedVotes.find(v => v.id === voteId);
-        
-        if (!vote) {
-            // DB 조회 (options 포함)
-            const { data } = await supabase.from('votes').select('*, vote_options(*)').eq('id', voteId).single();
-            vote = data;
-        }
-        
-        if (!vote) return [];
-
-        let targetOptionIds: string[] = [];
-        // options가 없을 경우 대비 (DB 조회 시 vote_options)
-        const options = vote.options || vote.vote_options || [];
-
-        if (filter === 'all' || options.length === 0) {
-            // 전체 대상
-        } else {
-            const sortedOptions = [...options].sort((a: any, b: any) => b.count - a.count);
-            const maxCount = sortedOptions[0].count;
-            
-            if (filter === 'win') {
-                targetOptionIds = sortedOptions.filter((o: any) => o.count === maxCount).map((o: any) => o.id);
-            } else if (filter === 'lose') {
-                const minCount = sortedOptions[sortedOptions.length - 1].count;
-                targetOptionIds = sortedOptions.filter((o: any) => o.count === minCount).map((o: any) => o.id);
+            // Announce in chat
+            if (this.bot.chat) {
+                const optionText = this.currentVote.options.map((o, i) => `${i + 1}. ${o.label}`).join(' / ');
+                await this.bot.chat.sendChat(`[투표 시작] ${this.currentVote.title}\n${optionText}\n채팅에 번호를 입력하세요!`);
             }
+        } catch (e) {
+            console.error('[VoteManager] Failed to start vote:', e);
         }
-
-        // 2. 투표자 목록 가져오기
-        let query = supabase.from('vote_ballots').select('user_id_hash, option_id').eq('vote_id', voteId);
-        if (targetOptionIds.length > 0) {
-            query = query.in('option_id', targetOptionIds);
-        } else if (optionId) {
-            query = query.eq('option_id', optionId);
-        }
-        
-        const { data: candidates } = await query;
-        if (!candidates || candidates.length === 0) return [];
-
-        // 3. 추첨 (중복 제거)
-        const uniqueUsers = Array.from(new Set(candidates.map(c => c.user_id_hash)));
-        const winnersId = [];
-        
-        for (let i = 0; i < count; i++) {
-            if (uniqueUsers.length === 0) break;
-            const idx = Math.floor(Math.random() * uniqueUsers.length);
-            winnersId.push(uniqueUsers[idx]);
-            uniqueUsers.splice(idx, 1);
-        }
-
-        // 4. 닉네임 조회
-        const { data: users } = await supabase
-            .from('points')
-            .select('user_id_hash, nickname')
-            .in('user_id_hash', winnersId);
-            
-        const userMap = new Map(users?.map(u => [u.user_id_hash, u.nickname]) || []);
-        
-        return winnersId.map(id => ({
-            userIdHash: id,
-            nickname: userMap.get(id) || `익명(${id.substring(0,4)})`
-        }));
     }
 
-    // 채팅으로 투표 참여
-    public async handleChat(chat: ChatEvent) {
-        if (!this.currentVote || this.currentVote.status !== 'active' || this.currentVote.mode !== 'normal') return;
+    async endVote() {
+        if (!this.currentVote || this.currentVote.status !== 'active') return;
+
+        try {
+            await supabase
+                .from('votes')
+                .update({ status: 'ended', ended_at: new Date().toISOString() })
+                .eq('id', this.currentVote.id);
+
+            this.currentVote.status = 'ended';
+            this.currentVote.endedAt = new Date().toISOString();
+            this.notify();
+
+            // Announce winner in chat
+            if (this.bot.chat && this.currentVote.options.length > 0) {
+                const sorted = [...this.currentVote.options].sort((a, b) => b.count - a.count);
+                const winner = sorted[0];
+                await this.bot.chat.sendChat(`[투표 종료] "${winner.label}" 승리! (${winner.count}표 / 총 ${this.currentVote.totalVotes}표)`);
+            }
+        } catch (e) {
+            console.error('[VoteManager] Failed to end vote:', e);
+        }
+    }
+
+    async resetVote() {
+        this.currentVote = null;
+        this.votedUsers.clear();
+        this.notify();
+    }
+
+    handleChat(chat: ChatEvent) {
+        if (!this.currentVote || this.currentVote.status !== 'active') return;
+        if (this.currentVote.mode !== 'chat') return;
 
         const msg = chat.message.trim();
-        if (!msg.startsWith('!투표')) return;
+        const num = parseInt(msg);
 
-        // !투표 단독 입력 시 도움말
-        if (msg === '!투표') {
-            // (BotInstance에서 처리하도록 위임했으므로 여기선 스킵하거나 중복 처리 방지)
-            return;
-        }
+        if (isNaN(num) || num < 1 || num > this.currentVote.options.length) return;
 
-        const selection = parseInt(msg.split(' ')[1]);
-        if (isNaN(selection) || selection < 1 || selection > this.currentVote.options.length) return;
+        const userIdHash = chat.profile.userIdHash;
+        const nickname = chat.profile.nickname;
 
-        const optionIndex = selection - 1;
-        const option = this.currentVote.options[optionIndex];
-        const userId = chat.profile.userIdHash;
+        // Check if already voted (when multiple not allowed)
+        if (!this.currentVote.allowMultiple && this.votedUsers.has(userIdHash)) return;
 
-        const { data: exist } = await supabase.from('vote_ballots').select('id').eq('vote_id', this.currentVote.id).eq('user_id_hash', userId).single();
-        if (exist) return; 
-
-        await supabase.from('vote_ballots').insert({
-            vote_id: this.currentVote.id,
-            user_id_hash: userId,
-            option_id: option.id,
-            amount: 1
-        });
-
-        option.count++;
-        this.currentVote.totalParticipants++;
-        this.currentVote.totalVotes++;
-        await supabase.rpc('increment_vote_option', { row_id: option.id, x: 1 });
-        this.notify();
+        this.castVote(num - 1, userIdHash, nickname, 1);
     }
 
-    // 후원으로 투표 참여
-    public async handleDonation(donation: DonationEvent) {
-        if (!this.currentVote || this.currentVote.status !== 'active' || this.currentVote.mode !== 'donation') return;
-        
-        const msg = donation.message || '';
-        const match = msg.match(/!투표\s+(\d+)/);
-        if (!match) return;
+    handleDonation(donation: DonationEvent) {
+        if (!this.currentVote || this.currentVote.status !== 'active') return;
+        if (this.currentVote.mode !== 'donation') return;
 
-        const selection = parseInt(match[1]);
-        if (selection < 1 || selection > this.currentVote.options.length) return;
+        const msg = (donation.message || '').trim();
+        const num = parseInt(msg);
 
-        const optionIndex = selection - 1;
+        if (isNaN(num) || num < 1 || num > this.currentVote.options.length) return;
+
+        const userIdHash = donation.profile?.userIdHash || 'anonymous';
+        const nickname = donation.profile?.nickname || '익명';
+        const amount = (donation as any).payAmount || 1000;
+        const weight = Math.floor(amount / 1000); // 1000원 = 1표
+
+        if (weight < 1) return;
+
+        this.castVote(num - 1, userIdHash, nickname, weight);
+    }
+
+    private async castVote(optionIndex: number, userIdHash: string, nickname: string, weight: number) {
+        if (!this.currentVote) return;
+
         const option = this.currentVote.options[optionIndex];
-        const amount = donation.payAmount || 0;
+        if (!option) return;
 
-        await supabase.from('vote_ballots').insert({
-            vote_id: this.currentVote.id,
-            user_id_hash: donation.profile?.userIdHash || 'unknown',
-            option_id: option.id,
-            amount: amount
-        });
+        try {
+            await supabase.from('vote_ballots').insert({
+                vote_id: this.currentVote.id,
+                option_id: option.id,
+                user_id_hash: userIdHash,
+                nickname,
+                weight
+            });
 
-        option.count += amount;
-        this.currentVote.totalParticipants++;
-        this.currentVote.totalVotes += amount;
-        await supabase.rpc('increment_vote_option', { row_id: option.id, x: amount });
-        this.notify();
+            option.count += weight;
+            option.voters.push({ odHash: userIdHash, nickname, weight });
+            this.currentVote.totalVotes += weight;
+            this.votedUsers.add(userIdHash);
+
+            this.notify();
+        } catch (e) {
+            console.error('[VoteManager] Failed to cast vote:', e);
+        }
+    }
+
+    async pickWinner(optionId: string): Promise<{ nickname: string; userIdHash: string } | null> {
+        if (!this.currentVote) return null;
+
+        const option = this.currentVote.options.find(o => o.id === optionId);
+        if (!option || option.voters.length === 0) return null;
+
+        const randomIndex = Math.floor(Math.random() * option.voters.length);
+        const winner = option.voters[randomIndex];
+
+        return { nickname: winner.nickname, userIdHash: winner.odHash };
+    }
+
+    async getVoteHistory(): Promise<any[]> {
+        try {
+            const { data } = await supabase
+                .from('votes')
+                .select('*, vote_options(*)')
+                .eq('channel_id', this.channelId)
+                .eq('status', 'ended')
+                .order('created_at', { ascending: false })
+                .limit(10);
+
+            return data || [];
+        } catch (e) {
+            return [];
+        }
     }
 }

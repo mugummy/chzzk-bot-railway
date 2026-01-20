@@ -77,12 +77,11 @@ wss.on('connection', async (ws, req) => {
         try { safeSend('songStateUpdate', bot.songs.getState()); } catch(e) {}
         try { safeSend('participationStateUpdate', bot.participation.getState()); } catch(e) {}
         try { safeSend('greetStateUpdate', bot.greet.getState()); } catch(e) {}
-        
-        // [New Features State]
+
+        // Vote/Draw/Roulette State
         try { safeSend('voteStateUpdate', bot.vote.getState()); } catch(e) {}
         try { safeSend('drawStateUpdate', bot.draw.getState()); } catch(e) {}
         try { safeSend('rouletteStateUpdate', bot.roulette.getState()); } catch(e) {}
-        try { safeSend('overlayStateUpdate', bot.overlayManager.getState()); } catch(e) {}
 
         try { safeSend('chatHistoryLoad', channelChatHistory.get(channelId) || []); } catch(e) {}
         
@@ -153,40 +152,51 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'playNext') bot.songs.playNext();
                     if (data.action === 'remove') bot.songs.removeSong(data.index);
                     break;
-                
-                // [New Feature Handlers]
+
+                // Vote Handlers
                 case 'createVote':
-                    await bot.vote.createVote(data.title, data.options, data.mode);
-                    if (data.autoStart) await bot.vote.startVote();
+                    await bot.vote.createVote(data.title, data.options, data.mode, data.allowMultiple);
                     break;
-                case 'startVote': await bot.vote.startVote(); break;
-                case 'endVote': await bot.vote.endVote(); break;
-                case 'deleteVote': await bot.vote.deleteVote(data.voteId); break;
-                case 'resetVote': await bot.vote.resetVote(); break;
-                case 'pickVoteWinner': 
-                    const winners = await bot.vote.pickWinner(data.voteId, data.optionId, data.count, data.filter);
-                    ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: winners }));
+                case 'startVote':
+                    await bot.vote.startVote();
                     break;
-                case 'getBallots':
-                    const ballots = await bot.vote.getBallots(data.voteId);
-                    ws.send(JSON.stringify({ type: 'voteBallotsResponse', payload: ballots }));
+                case 'endVote':
+                    await bot.vote.endVote();
                     break;
-                case 'getVoteHistory':
-                    const history = await bot.vote.getVoteHistory();
-                    ws.send(JSON.stringify({ type: 'voteHistoryResponse', payload: history }));
+                case 'resetVote':
+                    await bot.vote.resetVote();
                     break;
-                
-                case 'startDraw': bot.draw.startDraw(data.settings); break;
-                case 'stopDraw': bot.draw.stopDraw(); break; // [New]
-                case 'pickWinners': await bot.draw.pickWinners(); break;
-                case 'resetDraw': bot.draw.resetDraw(); break;
-                
-                case 'updateRoulette': bot.roulette.updateItems(data.items); break;
-                case 'spinRoulette': bot.roulette.spin(); break;
-                case 'resetRoulette': bot.roulette.resetRoulette(); break;
-                
-                case 'toggleOverlay': bot.overlayManager.setVisible(data.visible); break;
-                case 'setOverlayView': bot.overlayManager.setView(data.view); break;
+                case 'pickVoteWinner':
+                    const voteWinner = await bot.vote.pickWinner(data.optionId);
+                    ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: voteWinner }));
+                    break;
+
+                // Draw Handlers
+                case 'startDraw':
+                    await bot.draw.startRecruiting(data.keyword, data.subsOnly);
+                    break;
+                case 'stopDraw':
+                    await bot.draw.stopRecruiting();
+                    break;
+                case 'pickDrawWinner':
+                    const drawWinner = await bot.draw.pickWinner();
+                    ws.send(JSON.stringify({ type: 'drawWinnerResult', payload: drawWinner }));
+                    break;
+                case 'resetDraw':
+                    await bot.draw.resetDraw();
+                    break;
+
+                // Roulette Handlers
+                case 'updateRoulette':
+                    await bot.roulette.updateItems(data.items);
+                    break;
+                case 'spinRoulette':
+                    const rouletteResult = await bot.roulette.spin();
+                    ws.send(JSON.stringify({ type: 'rouletteResult', payload: rouletteResult }));
+                    break;
+                case 'resetRoulette':
+                    await bot.roulette.resetRoulette();
+                    break;
             }
         } catch (err) { console.error('[WS] System Error:', err); }
     });

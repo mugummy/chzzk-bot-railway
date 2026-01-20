@@ -11,7 +11,6 @@ import { ParticipationManager } from './ParticipationManager';
 import { VoteManager } from './VoteManager';
 import { DrawManager } from './DrawManager';
 import { RouletteManager } from './RouletteManager';
-import { OverlayManager } from './OverlayManager';
 
 export class BotInstance {
     private client: ChzzkClient;
@@ -34,7 +33,6 @@ export class BotInstance {
     public vote!: VoteManager;
     public draw!: DrawManager;
     public roulette!: RouletteManager;
-    public overlayManager!: OverlayManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
     private onChatCallback: (chat: ChatEvent) => void = () => {};
@@ -72,14 +70,13 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
-        // [New Features]
-        this.overlayManager = new OverlayManager(this);
+        // Vote/Draw/Roulette Managers
         this.vote = new VoteManager(this);
-        this.vote.setOnStateChangeListener((t, p) => this.notify(t, p));
+        this.vote.setOnStateChangeListener((type, payload) => this.notify(type, payload));
         this.draw = new DrawManager(this);
-        this.draw.setOnStateChangeListener((t, p) => this.notify(t, p));
+        this.draw.setOnStateChangeListener((type, payload) => this.notify(type, payload));
         this.roulette = new RouletteManager(this);
-        this.roulette.setOnStateChangeListener((t, p) => this.notify(t, p));
+        this.roulette.setOnStateChangeListener((type, payload) => this.notify(type, payload));
 
         try {
             await this.refreshLiveInfo();
@@ -105,8 +102,8 @@ export class BotInstance {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
         this.points.awardPoints(chat, this.settings.getSettings());
-        
-        // 투표 및 추첨 채팅 핸들링
+
+        // 투표/추첨 채팅 처리
         this.vote.handleChat(chat);
         this.draw.handleChat(chat);
 
@@ -145,10 +142,6 @@ export class BotInstance {
         // 2. 기본 기능 목록
         const basicCmds = [];
         if (s.songRequestMode !== 'off') basicCmds.push('!노래');
-        if (s.chatEnabled) {
-            basicCmds.push('!투표');
-            basicCmds.push('!추첨'); 
-        }
         if (s.participationCommand) basicCmds.push(s.participationCommand);
         if (s.pointsEnabled) basicCmds.push('!포인트');
 
@@ -158,7 +151,7 @@ export class BotInstance {
             message += `📌 채널 명령어: ${customCmds}\n`;
         }
         message += `🔧 기본 기능: ${basicCmds.join(', ')}\n`;
-        message += `💡 상세 사용법은 해당 명령어를 입력해보세요! (예: !투표)`;
+        message += `💡 상세 사용법은 해당 명령어를 입력해보세요!`;
 
         await this.chat.sendChat(message);
     }
@@ -166,8 +159,6 @@ export class BotInstance {
     private async handleDonation(donation: DonationEvent) {
         this.songs.addSongFromDonation(donation, donation.message || '', this.settings.getSettings());
         this.vote.handleDonation(donation);
-        // 추첨용 후원 로그 저장 (DataManager 혹은 직접 Supabase)
-        // 여기서는 간단히 로그만 남김, 실제로는 DrawManager에서 읽어감
         await DataManager.logDonation(this.channelId, donation);
     }
 

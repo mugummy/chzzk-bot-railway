@@ -1,30 +1,37 @@
 import { ChatEvent } from 'chzzk';
-import { BotInstance } from './BotInstance';
 import { supabase } from './supabase';
 
-export interface DrawSettings {
-    target: 'all' | 'chat' | 'subscriber' | 'donation';
-    winnerCount: number;
-    command?: string; // 채팅 참여일 경우
-    minAmount?: number; // 후원 참여일 경우
-    allowDuplicate: boolean;
+interface DrawParticipant {
+    id: string;
+    userIdHash: string;
+    nickname: string;
+    role: string;
+}
+
+interface DrawSession {
+    id: string;
+    keyword: string;
+    subsOnly: boolean;
+    status: 'pending' | 'recruiting' | 'picking' | 'ended';
+    participants: DrawParticipant[];
+    winner: DrawParticipant | null;
+    createdAt: string;
+    endedAt?: string;
 }
 
 export class DrawManager {
-    private participants: Set<string> = new Set(); // 채팅 참여자 (userIdHash)
-    private donationPool: { userIdHash: string, nickname: string, amount: number }[] = []; 
-    private isCollecting: boolean = false;
-    private currentSettings: DrawSettings | null = null;
-    
-    // 오버레이 연출용 상태
-    private drawStatus: 'idle' | 'rolling' | 'completed' = 'idle';
-    private winners: any[] = [];
-
+    private bot: any;
+    private channelId: string;
+    private currentSession: DrawSession | null = null;
+    private participantSet: Set<string> = new Set();
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
-    constructor(private bot: BotInstance) {}
+    constructor(bot: any) {
+        this.bot = bot;
+        this.channelId = bot.getChannelId();
+    }
 
-    public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
+    setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
@@ -32,204 +39,209 @@ export class DrawManager {
         this.onStateChangeCallback('drawStateUpdate', this.getState());
     }
 
-    public getState() {
-        // [New] 참여자 명단(닉네임) 포함
-        let participantsList: string[] = [];
-        if (this.currentSettings?.target === 'donation') {
-            participantsList = this.donationPool.map(d => `${d.nickname}(${d.amount})`);
-        } else {
-            participantsList = Array.from(this.participants).map(p => {
-                try { return JSON.parse(p).nick; } catch(e) { return 'Unknown'; }
-            });
+    getState() {
+        if (!this.currentSession) {
+            return {
+                isRecruiting: false,
+                status: 'idle',
+                participantCount: 0,
+                participants: [],
+                keyword: '!참여',
+                subsOnly: false,
+                winner: null
+            };
         }
 
         return {
-            isCollecting: this.isCollecting,
-            participantCount: participantsList.length,
-            participantsList: participantsList.slice(-50), // 최신 50명만 전송 (데이터 절약)
-            settings: this.currentSettings,
-            status: this.drawStatus,
-            winners: this.winners
+            isRecruiting: this.currentSession.status === 'recruiting',
+            status: this.currentSession.status,
+            participantCount: this.currentSession.participants.length,
+            participants: this.currentSession.participants,
+            keyword: this.currentSession.keyword,
+            subsOnly: this.currentSession.subsOnly,
+            winner: this.currentSession.winner
         };
     }
 
-    // 추첨 시작 (참여자 모집 시작)
-    public startDraw(settings: DrawSettings) {
-        this.currentSettings = settings;
-        this.isCollecting = true;
-        this.participants.clear();
-        this.donationPool = [];
-        this.winners = [];
-        this.drawStatus = 'idle';
-        
-        if (settings.target === 'donation') {
-            this.loadDonors(settings.minAmount || 0);
-        }
-
-        // [Fix] 상세 채팅 알림
-        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-            let title = `📢 [추첨 시작] ${settings.winnerCount}명을 추첨합니다!`;
-            let sub = "";
-
-            if (settings.target === 'chat') {
-                const cmd = settings.command || '!참여';
-                sub = `👉 채팅창에 '${cmd}' 를 입력하세요!`;
-                if (this.currentSettings.target === 'subscriber') sub += " (⭐구독자 전용)";
-            } else if (settings.target === 'all') {
-                sub = `👉 채팅을 입력하면 자동으로 참여됩니다!`;
-            } else if (settings.target === 'subscriber') {
-                sub = `👉 채팅을 입력하세요! (⭐구독자 전용)`;
-            } else if (settings.target === 'donation') {
-                const amt = settings.minAmount || 0;
-                sub = amt > 0 ? `👉 ${amt}원 이상 후원하신 분들 대상!` : `👉 모든 후원자 대상!`;
+    async startRecruiting(keyword: string = '!참여', subsOnly: boolean = false) {
+        try {
+            // End any existing session
+            if (this.currentSession && this.currentSession.status === 'recruiting') {
+                await this.stopRecruiting();
             }
 
-            this.bot.chat.sendChat(title);
-            if (sub) this.bot.chat.sendChat(sub);
-        }
+            const { data: session, error } = await supabase
+                .from('draw_sessions')
+                .insert({
+                    channel_id: this.channelId,
+                    keyword,
+                    subs_only: subsOnly,
+                    status: 'recruiting'
+                })
+                .select()
+                .single();
 
-        this.notify();
-    }
+            if (error || !session) throw error;
 
-    // [New] 모집 마감
-    public stopDraw() {
-        this.isCollecting = false;
-        if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-            this.bot.chat.sendChat(`🛑 [추첨 마감] 모집이 종료되었습니다. 곧 당첨자를 발표합니다!`);
-        }
-        this.notify();
-    }
+            this.currentSession = {
+                id: session.id,
+                keyword,
+                subsOnly,
+                status: 'recruiting',
+                participants: [],
+                winner: null,
+                createdAt: session.created_at
+            };
 
-    private async loadDonors(minAmount: number) {
-        // 오늘 날짜 기준 혹은 특정 시점 이후 후원자 로드
-        const { data } = await supabase
-            .from('donation_logs')
-            .select('*')
-            .eq('channel_id', this.bot.getChannelId())
-            .gte('amount', minAmount)
-            .order('created_at', { ascending: false })
-            .limit(500); // 최대 500명 제한
-
-        if (data) {
-            this.donationPool = data.map(d => ({ userIdHash: d.user_id_hash, nickname: d.nickname, amount: d.amount }));
+            this.participantSet.clear();
             this.notify();
+
+            // Announce in chat
+            if (this.bot.chat) {
+                const subsText = subsOnly ? ' (구독자 전용)' : '';
+                await this.bot.chat.sendChat(`[추첨 시작] 채팅에 "${keyword}" 입력으로 참여하세요!${subsText}`);
+            }
+
+            return this.currentSession;
+        } catch (e) {
+            console.error('[DrawManager] Failed to start recruiting:', e);
+            throw e;
         }
     }
 
-    // [New] 추첨 초기화
-    public resetDraw() {
-        this.isCollecting = false;
-        this.participants.clear();
-        this.donationPool = [];
-        this.winners = [];
-        this.drawStatus = 'idle';
-        this.bot.overlayManager?.setView('none');
+    async stopRecruiting() {
+        if (!this.currentSession || this.currentSession.status !== 'recruiting') return;
+
+        this.currentSession.status = 'pending';
         this.notify();
+
+        // Announce in chat
+        if (this.bot.chat) {
+            await this.bot.chat.sendChat(`[모집 종료] 총 ${this.currentSession.participants.length}명 참여!`);
+        }
     }
 
-    // 채팅 이벤트 핸들링 (참여 명령어 및 도움말)
-    public handleChat(chat: ChatEvent) {
+    handleChat(chat: ChatEvent) {
+        if (!this.currentSession || this.currentSession.status !== 'recruiting') return;
+
         const msg = chat.message.trim();
-        
-        // [New] !추첨 도움말
-        if (msg === '!추첨') {
-            if (this.isCollecting && this.currentSettings) {
-                const count = this.currentSettings.winnerCount;
-                let guide = "";
-                if (this.currentSettings.target === 'chat') guide = `명령어: ${this.currentSettings.command || '!참여'}`;
-                else if (this.currentSettings.target === 'donation') guide = `대상: ${this.currentSettings.minAmount}원 이상 후원`;
-                else guide = "대상: 전체 시청자 채팅";
-                
-                this.bot.chat?.sendChat(`🎁 [추첨 진행 중] ${count}명 추첨!`);
-                this.bot.chat?.sendChat(`👉 ${guide}`);
-                this.bot.chat?.sendChat(`현재 참여자: ${this.participants.size + this.donationPool.length}명`);
-            } else {
-                this.bot.chat?.sendChat(`🎁 [추첨 도움말]`);
-                this.bot.chat?.sendChat(`- 현재 진행 중인 추첨이 없습니다.`);
-                this.bot.chat?.sendChat(`- 추첨이 시작되면 안내에 따라 참여해주세요!`);
-            }
-            return;
-        }
+        if (msg !== this.currentSession.keyword) return;
 
-        if (!this.isCollecting || !this.currentSettings) return;
-        if (this.currentSettings.target !== 'chat') return;
+        const userIdHash = chat.profile.userIdHash;
+        const nickname = chat.profile.nickname;
 
-        const cmd = this.currentSettings.command || '!참여';
-        if (msg === cmd) {
-            this.participants.add(JSON.stringify({ id: chat.profile.userIdHash, nick: chat.profile.nickname }));
-            this.notify(); 
-        }
+        // Already participated
+        if (this.participantSet.has(userIdHash)) return;
+
+        // Determine role (simplified - in real app, check actual subscription status)
+        let role = '팬';
+        const badges = chat.profile.badge || {};
+        if ((badges as any).streamer) role = '계정주';
+        else if ((badges as any).manager) role = '매니저';
+        else if ((badges as any).subscriber) role = '구독자';
+
+        // Subs only check
+        if (this.currentSession.subsOnly && role === '팬') return;
+
+        this.addParticipant(userIdHash, nickname, role);
     }
 
-    // 추첨 실행 (결과 산출)
-    public async pickWinners() {
-        if (!this.currentSettings) return;
-        
-        // [Safety Check] 모집이 마감되지 않은 상태라면 자동으로 마감 처리
-        if (this.isCollecting) this.isCollecting = false;
-        this.drawStatus = 'rolling';
-        
-        let pool: any[] = [];
-
-        if (this.currentSettings.target === 'donation') {
-            pool = this.donationPool;
-        } else {
-            pool = Array.from(this.participants).map(p => {
-                try { return JSON.parse(p); } catch(e) { return null; }
-            }).filter(p => p !== null);
-        }
-
-        if (pool.length === 0) {
-            console.log('[DrawManager] No participants.');
-            // 참여자 없음 알림
-            if (this.bot.chat) this.bot.chat.sendChat('📢 참여자가 없어 추첨을 진행할 수 없습니다.');
-            this.drawStatus = 'idle'; // 다시 대기 상태로
-            this.notify();
-            return;
-        }
-
-        // 추첨 로직
-        const count = Math.min(this.currentSettings.winnerCount, pool.length);
-        const winners = [];
-        const tempPool = [...pool];
-
-        for (let i = 0; i < count; i++) {
-            const idx = Math.floor(Math.random() * tempPool.length);
-            winners.push(tempPool[idx]);
-            if (!this.currentSettings.allowDuplicate) {
-                tempPool.splice(idx, 1);
-            }
-        }
-
-        this.winners = winners;
-        
-        // 오버레이에 애니메이션 시작 신호 전송
-        this.bot.overlayManager?.startDrawAnimation(winners);
+    private async addParticipant(userIdHash: string, nickname: string, role: string) {
+        if (!this.currentSession) return;
 
         try {
-            // DB 저장
-            await supabase.from('draw_history').insert({
-                channel_id: this.bot.getChannelId(),
-                type: this.currentSettings.target,
-                winners: winners,
-                settings: this.currentSettings
-            });
-        } catch (err) {
-            console.error('[DrawManager] DB Save Error:', err);
+            const { data, error } = await supabase
+                .from('draw_participants')
+                .insert({
+                    session_id: this.currentSession.id,
+                    user_id_hash: userIdHash,
+                    nickname,
+                    role
+                })
+                .select()
+                .single();
+
+            if (error) {
+                // Likely duplicate, ignore
+                return;
+            }
+
+            const participant: DrawParticipant = {
+                id: data.id,
+                userIdHash,
+                nickname,
+                role
+            };
+
+            this.currentSession.participants.push(participant);
+            this.participantSet.add(userIdHash);
+            this.notify();
+        } catch (e) {
+            console.error('[DrawManager] Failed to add participant:', e);
+        }
+    }
+
+    async pickWinner(): Promise<DrawParticipant | null> {
+        if (!this.currentSession || this.currentSession.participants.length === 0) return null;
+
+        // Stop recruiting if still active
+        if (this.currentSession.status === 'recruiting') {
+            await this.stopRecruiting();
         }
 
-        // 3초 후 상태 완료로 변경 (애니메이션 시간 고려)
-        setTimeout(() => {
-            this.drawStatus = 'completed';
+        this.currentSession.status = 'picking';
+        this.notify();
+
+        const participants = this.currentSession.participants;
+        const randomIndex = Math.floor(Math.random() * participants.length);
+        const winner = participants[randomIndex];
+
+        try {
+            await supabase
+                .from('draw_sessions')
+                .update({
+                    status: 'ended',
+                    winner_id_hash: winner.userIdHash,
+                    winner_nickname: winner.nickname,
+                    ended_at: new Date().toISOString()
+                })
+                .eq('id', this.currentSession.id);
+
+            this.currentSession.winner = winner;
+            this.currentSession.status = 'ended';
             this.notify();
-            // 웹소켓으로 대시보드에 결과 알림 (TTS용)
-            this.onStateChangeCallback('drawWinnerResult', { winners });
-            
-            // [New] 결과 발표 채팅
-            if (this.bot.chat && this.bot.settings.getSettings().chatEnabled) {
-                const names = winners.map(w => w.nickname || w.nick).join(', ');
-                this.bot.chat.sendChat(`🎉 당첨을 축하합니다! [ ${names} ]`);
+
+            // Announce winner
+            if (this.bot.chat) {
+                await this.bot.chat.sendChat(`[당첨] ${winner.nickname}님 축하합니다!`);
             }
-        }, 3000);
+
+            return winner;
+        } catch (e) {
+            console.error('[DrawManager] Failed to pick winner:', e);
+            return null;
+        }
+    }
+
+    async resetDraw() {
+        this.currentSession = null;
+        this.participantSet.clear();
+        this.notify();
+    }
+
+    async getDrawHistory(): Promise<any[]> {
+        try {
+            const { data } = await supabase
+                .from('draw_sessions')
+                .select('*')
+                .eq('channel_id', this.channelId)
+                .eq('status', 'ended')
+                .order('created_at', { ascending: false })
+                .limit(10);
+
+            return data || [];
+        } catch (e) {
+            return [];
+        }
     }
 }
