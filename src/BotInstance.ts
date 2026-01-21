@@ -8,6 +8,7 @@ import { SettingsManager } from './SettingsManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
 import { ParticipationManager } from './ParticipationManager';
+import { VoteManager } from './VoteManager';
 
 export class BotInstance {
     private client: ChzzkClient;
@@ -27,6 +28,7 @@ export class BotInstance {
     public counters!: CounterManager;
     public macros!: MacroManager;
     public participation!: ParticipationManager;
+    public vote!: VoteManager;
 
     private onStateChangeCallback: (type: string, payload: any) => void = () => { };
     private onChatCallback: (chat: ChatEvent) => void = () => { };
@@ -64,6 +66,8 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
+        this.vote = new VoteManager(this);
+
 
 
         try {
@@ -91,7 +95,9 @@ export class BotInstance {
         this.onChatCallback(chat);
         this.points.awardPoints(chat, this.settings.getSettings());
 
-        // 투표/추첨 채팅 처리 제거됨
+        // 투표/추첨 처리
+        this.vote.handleVoteMessage(chat);
+        this.vote.handleDrawMessage(chat);
 
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
@@ -144,7 +150,7 @@ export class BotInstance {
 
     private async handleDonation(donation: DonationEvent) {
         this.songs.addSongFromDonation(donation, donation.message || '', this.settings.getSettings());
-        // this.vote.handleDonation(donation); // Removed
+        this.vote.handleVoteDonation(donation);
         await DataManager.logDonation(this.channelId, donation);
     }
 
@@ -163,8 +169,16 @@ export class BotInstance {
             currentSong: this.songs.getData().currentSong,
             greetData: this.greet.getData(),
             participants: this.participation.getState()
+            // Vote state is ephemeral for now, or TODO: save
         });
     }
 
     public async disconnect() { if (this.livePollingTimer) clearInterval(this.livePollingTimer); if (this.chat) { this.macros.stopAllMacros(); await this.chat.disconnect(); this.chat = null; } }
+
+    // [Fix] Lints
+    public isConnected() { return this.chat?.connected ?? false; }
+    public async sendChat(msg: string) { if (this.chat) await this.chat.sendChat(msg); }
+    public getVoteState() { return this.vote.getStates().vote; }
+    public getDrawState() { return this.vote.getStates().draw; }
+    public getRouletteState() { return this.vote.getStates().roulette; }
 }

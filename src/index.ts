@@ -25,7 +25,7 @@ app.use(cors({
 app.use(express.json());
 
 // 봇 매니저 초기화
-const botManager = new BotManager(wss);
+const botManager = BotManager.getInstance();
 
 // 헬스 체크
 app.get('/health', (req, res) => {
@@ -173,155 +173,45 @@ wss.on('connection', (ws, req) => {
           break;
 
         // ========== 투표 ==========
-        case 'createVote':
-          if (bot) {
-            const result = bot.createVote(data.question, data.options, data.durationSeconds);
-            ws.send(JSON.stringify({ type: 'voteResult', ...result }));
-            broadcastToUser(userId, { type: 'voteUpdate', payload: bot.getVoteState() });
-          }
-          break;
-
         case 'startVote':
-          if (bot) {
-            const result = bot.startVote();
-            ws.send(JSON.stringify({ type: 'voteResult', ...result }));
-            broadcastToUser(userId, { type: 'voteUpdate', payload: bot.getVoteState() });
-          }
+          if (bot) bot.vote.startVote(data.title, data.mode, data.items, data.duration, data.allowMulti, data.unit);
           break;
-
         case 'endVote':
-          if (bot) {
-            const result = bot.endVote();
-            ws.send(JSON.stringify({ type: 'voteResult', ...result }));
-            broadcastToUser(userId, { type: 'voteUpdate', payload: bot.getVoteState() });
-          }
+          if (bot) bot.vote.endVote();
           break;
-
-        case 'resetVote':
-          if (bot) {
-            bot.resetVote();
-            broadcastToUser(userId, { type: 'voteUpdate', payload: bot.getVoteState() });
-          }
+        case 'stopVote':
+          if (bot) bot.vote.stopVote();
           break;
-
-        case 'drawVote':
-          if (bot) {
-            const result = bot.drawVoteWinner(data.count, data.optionId);
-            if (result.success && result.winners) {
-              const allParticipants = bot.getVoteState()?.voterChoices?.map(v => v.nickname) || [];
-              const animationDuration = 3000 + Math.random() * 2000;
-
-              broadcastToUser(userId, {
-                type: 'drawWinnerResult',
-                success: true,
-                payload: {
-                  winners: result.winners,
-                  allParticipants,
-                  animationDuration,
-                }
-              });
-
-              // 채팅 발표는 애니메이션 후
-              setTimeout(() => {
-                const winnerNames = result.winners!.map((w: any) => w.nickname).join(', ');
-                bot.sendChat(`🎉 투표 추첨 당첨자: ${winnerNames}`);
-              }, animationDuration + 500);
-            } else {
-              ws.send(JSON.stringify({ type: 'drawResult', success: false, message: result.message }));
-            }
-          }
+        case 'toggleVoteOverlay':
+          if (bot) bot.vote.toggleVoteOverlay(data.show);
           break;
 
         // ========== 시청자 추첨 ==========
-        case 'startDraw':
-          if (bot) {
-            const result = bot.startDraw(data.keyword, data.settings);
-            ws.send(JSON.stringify({ type: 'drawResult', ...result }));
-            broadcastToUser(userId, { type: 'drawUpdate', payload: bot.getDrawState() });
-          }
+        case 'startDrawRecruit':
+          if (bot) bot.vote.startDrawRecruit(data.keyword, data.subsOnly, data.duration);
           break;
-
-        case 'stopDrawCollecting':
-          if (bot) {
-            const result = bot.stopDrawCollecting();
-            ws.send(JSON.stringify({ type: 'drawResult', ...result }));
-            broadcastToUser(userId, { type: 'drawUpdate', payload: bot.getDrawState() });
-          }
+        case 'pickDrawWinner':
+          if (bot) bot.vote.pickDrawWinner(data.count);
           break;
-
-        case 'executeDraw':
-          if (bot) {
-            const result = bot.executeDraw(data.count);
-            if (result.success) {
-              broadcastToUser(userId, {
-                type: 'drawWinnerResult',
-                success: true,
-                payload: {
-                  winners: result.winners,
-                  allParticipants: result.allParticipants,
-                  animationDuration: result.animationDuration,
-                }
-              });
-
-              // 채팅 발표는 애니메이션 후
-              setTimeout(() => {
-                const winnerNames = result.winners!.map((w: any) => w.nickname).join(', ');
-                bot.sendChat(`🎉 축하합니다! 당첨자: ${winnerNames}`);
-              }, (result.animationDuration || 4000) + 500);
-            } else {
-              ws.send(JSON.stringify({ type: 'drawResult', success: false, message: result.message }));
-            }
-            broadcastToUser(userId, { type: 'drawUpdate', payload: bot.getDrawState() });
-          }
+        case 'stopDraw':
+          if (bot) bot.vote.stopDraw();
           break;
-
-        case 'resetDraw':
-          if (bot) {
-            bot.resetDraw();
-            broadcastToUser(userId, { type: 'drawUpdate', payload: bot.getDrawState() });
-          }
-          break;
-
-        case 'clearPreviousWinners':
-          if (bot) {
-            bot.clearPreviousWinners();
-            broadcastToUser(userId, { type: 'drawUpdate', payload: bot.getDrawState() });
-          }
+        case 'toggleDrawOverlay':
+          if (bot) bot.vote.toggleDrawOverlay(data.show);
           break;
 
         // ========== 룰렛 ==========
-        case 'createRoulette':
-          if (bot) {
-            const result = bot.createRoulette(data.items);
-            ws.send(JSON.stringify({ type: 'rouletteResult', ...result }));
-            broadcastToUser(userId, { type: 'rouletteUpdate', payload: bot.getRouletteState() });
-          }
+        case 'updateRoulette':
+          if (bot) bot.vote.updateRouletteItems(data.items);
           break;
-
         case 'spinRoulette':
-          if (bot) {
-            const result = bot.spinRoulette();
-            if (result.success) {
-              broadcastToUser(userId, {
-                type: 'rouletteSpinResult',
-                success: true,
-                payload: {
-                  result: result.result,
-                  spinDegree: result.spinDegree,
-                  animationDuration: result.animationDuration,
-                }
-              });
-            } else {
-              ws.send(JSON.stringify({ type: 'rouletteResult', success: false, message: result.message }));
-            }
-          }
+          if (bot) bot.vote.spinRoulette();
           break;
-
         case 'resetRoulette':
-          if (bot) {
-            bot.resetRoulette();
-            broadcastToUser(userId, { type: 'rouletteUpdate', payload: bot.getRouletteState() });
-          }
+          if (bot) bot.vote.resetRoulette();
+          break;
+        case 'toggleRouletteOverlay':
+          if (bot) bot.vote.toggleRouletteOverlay(data.show);
           break;
 
         default:

@@ -6,7 +6,7 @@ export class BotManager {
     private static instance: BotManager;
     private bots: Map<string, BotInstance> = new Map();
 
-    private constructor() {}
+    private constructor() { }
 
     public static getInstance(): BotManager {
         if (!BotManager.instance) BotManager.instance = new BotManager();
@@ -19,7 +19,7 @@ export class BotManager {
     public async initializeAllBots() {
         console.log('[BotManager] Warming up all registered bots...');
         const { data: channels, error } = await supabase.from('channels').select('channel_id');
-        
+
         if (error || !channels) {
             console.error('[BotManager] Failed to load channels:', error);
             return;
@@ -58,4 +58,14 @@ export class BotManager {
         const tasks = Array.from(this.bots.keys()).map(id => this.removeBot(id));
         await Promise.all(tasks);
     }
+
+    public async start() { await this.initializeAllBots(); }
+    public async stop() { await this.shutdownAll(); }
+    public getActiveBotsCount() { return this.bots.size; }
+
+    public setBroadcastFunction(fn: (userId: string, data: any) => void) {
+        this.broadcastFn = fn;
+        this.bots.forEach(bot => bot.setBroadcastCallback((type, payload) => fn(bot.getChannelId(), { type, payload })));
+    }
+    private broadcastFn: ((userId: string, data: any) => void) | null = null;
 }
