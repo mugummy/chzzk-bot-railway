@@ -155,7 +155,14 @@ wss.on('connection', async (ws, req) => {
 
                 // Vote Handlers
                 case 'createVote':
-                    await bot.vote.createVote(data.title, data.options, data.mode, data.allowMultiple);
+                    await bot.vote.createVote(
+                        data.title,
+                        data.options,
+                        data.mode,
+                        data.allowMultiple,
+                        data.minDonation || 1000,
+                        data.timerSeconds || null
+                    );
                     break;
                 case 'startVote':
                     await bot.vote.startVote();
@@ -173,7 +180,11 @@ wss.on('connection', async (ws, req) => {
 
                 // Draw Handlers
                 case 'startDraw':
-                    await bot.draw.startRecruiting(data.keyword, data.subsOnly);
+                    await bot.draw.startRecruiting(
+                        data.keyword || null,
+                        data.subsOnly || false,
+                        data.excludeWinners || false
+                    );
                     break;
                 case 'stopDraw':
                     await bot.draw.stopRecruiting();
@@ -184,6 +195,9 @@ wss.on('connection', async (ws, req) => {
                     break;
                 case 'resetDraw':
                     await bot.draw.resetDraw();
+                    break;
+                case 'clearDrawWinners':
+                    await bot.draw.clearPreviousWinners();
                     break;
 
                 // Roulette Handlers

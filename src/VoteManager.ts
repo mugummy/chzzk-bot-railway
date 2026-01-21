@@ -15,6 +15,8 @@ interface VoteSession {
     status: 'pending' | 'active' | 'ended';
     mode: 'chat' | 'donation';
     allowMultiple: boolean;
+    minDonation: number; // minimum donation amount for 1 vote (donation mode)
+    timerSeconds: number | null; // null = no timer
     options: VoteOption[];
     totalVotes: number;
     createdAt: string;
@@ -27,6 +29,8 @@ export class VoteManager {
     private channelId: string;
     private currentVote: VoteSession | null = null;
     private votedUsers: Set<string> = new Set();
+    private timerInterval: NodeJS.Timeout | null = null;
+    private remainingSeconds: number = 0;
     private onStateChangeCallback: (type: string, payload: any) => void = () => {};
 
     constructor(bot: any) {
@@ -45,7 +49,7 @@ export class VoteManager {
 
     getState() {
         if (!this.currentVote) {
-            return { currentVote: null };
+            return { currentVote: null, remainingSeconds: 0 };
         }
 
         const sortedOptions = [...this.currentVote.options].sort((a, b) => b.count - a.count);
@@ -61,7 +65,8 @@ export class VoteManager {
                         : '0.0',
                     barPercent: (opt.count / maxCount) * 100
                 }))
-            }
+            },
+            remainingSeconds: this.remainingSeconds
         };
     }
 
@@ -103,6 +108,8 @@ export class VoteManager {
                     status: vote.status,
                     mode: vote.mode,
                     allowMultiple: vote.allow_multiple,
+                    minDonation: vote.min_donation || 1000,
+                    timerSeconds: vote.timer_seconds || null,
                     options: optionsWithVotes,
                     totalVotes: optionsWithVotes.reduce((sum, o) => sum + o.count, 0),
                     createdAt: vote.created_at,
@@ -117,7 +124,14 @@ export class VoteManager {
         }
     }
 
-    async createVote(title: string, optionLabels: string[], mode: 'chat' | 'donation' = 'chat', allowMultiple: boolean = false) {
+    async createVote(
+        title: string,
+        optionLabels: string[],
+        mode: 'chat' | 'donation' = 'chat',
+        allowMultiple: boolean = false,
+        minDonation: number = 1000,
+        timerSeconds: number | null = null
+    ) {
         try {
             // End any existing active vote
             if (this.currentVote && this.currentVote.status === 'active') {
@@ -131,7 +145,9 @@ export class VoteManager {
                     title,
                     status: 'pending',
                     mode,
-                    allow_multiple: allowMultiple
+                    allow_multiple: allowMultiple,
+                    min_donation: minDonation,
+                    timer_seconds: timerSeconds
                 })
                 .select()
                 .single();
@@ -157,6 +173,8 @@ export class VoteManager {
                 status: 'pending',
                 mode,
                 allowMultiple,
+                minDonation,
+                timerSeconds,
                 options: (options || []).map(opt => ({
                     id: opt.id,
                     label: opt.label,
@@ -188,20 +206,56 @@ export class VoteManager {
 
             this.currentVote.status = 'active';
             this.currentVote.startedAt = new Date().toISOString();
+
+            // Start timer if set
+            if (this.currentVote.timerSeconds && this.currentVote.timerSeconds > 0) {
+                this.startTimer(this.currentVote.timerSeconds);
+            }
+
             this.notify();
 
             // Announce in chat
             if (this.bot.chat) {
                 const optionText = this.currentVote.options.map((o, i) => `${i + 1}. ${o.label}`).join(' / ');
-                await this.bot.chat.sendChat(`[투표 시작] ${this.currentVote.title}\n${optionText}\n채팅에 번호를 입력하세요!`);
+                const modeText = this.currentVote.mode === 'donation'
+                    ? `(후원 ${this.currentVote.minDonation}원 = 1표)`
+                    : '(채팅에 번호 입력)';
+                const timerText = this.currentVote.timerSeconds
+                    ? ` [${this.currentVote.timerSeconds}초]`
+                    : '';
+                await this.bot.chat.sendChat(`[투표 시작] ${this.currentVote.title}${timerText}\n${optionText}\n${modeText}`);
             }
         } catch (e) {
             console.error('[VoteManager] Failed to start vote:', e);
         }
     }
 
+    private startTimer(seconds: number) {
+        this.remainingSeconds = seconds;
+        this.notify();
+
+        this.timerInterval = setInterval(() => {
+            this.remainingSeconds--;
+            this.notify();
+
+            if (this.remainingSeconds <= 0) {
+                this.endVote();
+            }
+        }, 1000);
+    }
+
+    private stopTimer() {
+        if (this.timerInterval) {
+            clearInterval(this.timerInterval);
+            this.timerInterval = null;
+        }
+        this.remainingSeconds = 0;
+    }
+
     async endVote() {
         if (!this.currentVote || this.currentVote.status !== 'active') return;
+
+        this.stopTimer();
 
         try {
             await supabase
@@ -225,6 +279,7 @@ export class VoteManager {
     }
 
     async resetVote() {
+        this.stopTimer();
         this.currentVote = null;
         this.votedUsers.clear();
         this.notify();
@@ -259,10 +314,15 @@ export class VoteManager {
 
         const userIdHash = donation.profile?.userIdHash || 'anonymous';
         const nickname = donation.profile?.nickname || '익명';
-        const amount = (donation as any).payAmount || 1000;
-        const weight = Math.floor(amount / 1000); // 1000원 = 1표
+        const amount = (donation as any).payAmount || 0;
+
+        // Calculate votes based on minDonation
+        const weight = Math.floor(amount / this.currentVote.minDonation);
 
         if (weight < 1) return;
+
+        // For donation mode, allowMultiple controls if same user can vote multiple times
+        if (!this.currentVote.allowMultiple && this.votedUsers.has(userIdHash)) return;
 
         this.castVote(num - 1, userIdHash, nickname, weight);
     }

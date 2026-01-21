@@ -30,11 +30,12 @@ export const defaultSettings: BotSettings = {
     participationCommand: '!시참',
     maxParticipants: 10,
     overlay: {
-        backgroundColor: '#000000',
+        backgroundColor: '#000000', // 박스 배경색 (투명도 조절 대상)
         textColor: '#ffffff',
-        accentColor: '#10b981', // emerald-500
+        accentColor: '#10b981', // 메인 강조 색상
         opacity: 0.9,
-        scale: 1.0
+        scale: 1.0,
+        theme: 'basic' // [New] basic, neon, glass, pixel
     }
 };
 
