@@ -185,6 +185,15 @@ wss.on('connection', (ws, req) => {
         case 'toggleVoteOverlay':
           if (bot) bot.vote.toggleVoteOverlay(data.show);
           break;
+        case 'updateVoteSettings':
+          if (bot) bot.vote.updateSettings(data.title);
+          break;
+        case 'resetVote':
+          if (bot) bot.vote.resetVote();
+          break;
+        case 'transferVotesToRoulette':
+          if (bot) bot.vote.transferVotesToRoulette();
+          break;
 
         // ========== 시청자 추첨 ==========
         case 'startDrawRecruit':
@@ -198,6 +207,9 @@ wss.on('connection', (ws, req) => {
           break;
         case 'toggleDrawOverlay':
           if (bot) bot.vote.toggleDrawOverlay(data.show);
+          break;
+        case 'resetDraw':
+          if (bot) bot.vote.resetDraw();
           break;
 
         // ========== 룰렛 ==========

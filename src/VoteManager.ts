@@ -250,6 +250,34 @@ export class VoteManager {
         }
     }
 
+    public updateSettings(title: string) {
+        this.voteState.title = title;
+        // Optionally update DB if active?
+        this.broadcast();
+    }
+
+    public resetVote() {
+        this.voteState = {
+            ...this.voteState,
+            status: 'idle',
+            voteId: null,
+            items: [],
+            title: '',
+            showOverlay: false
+        };
+        this.broadcast();
+    }
+
+    public transferVotesToRoulette() {
+        const items = this.voteState.items
+            .filter(i => i.count > 0)
+            .map(i => ({ name: i.name, weight: i.count }));
+
+        if (items.length === 0) return;
+
+        this.updateRouletteItems(items);
+    }
+
     public handleVoteDonation(donation: DonationEvent) {
         if (this.voteState.status !== 'active' || this.voteState.mode !== 'donation') return;
 
@@ -388,6 +416,18 @@ export class VoteManager {
         this.drawState.status = 'idle';
         this.drawState.showOverlay = false;
         if (this.intervals.draw) clearInterval(this.intervals.draw);
+        this.broadcast();
+    }
+
+    public resetDraw() {
+        this.drawState = {
+            ...this.drawState,
+            status: 'idle',
+            sessionId: null,
+            candidates: [],
+            winner: null,
+            showOverlay: false
+        };
         this.broadcast();
     }
 
