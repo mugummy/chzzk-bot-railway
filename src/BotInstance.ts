@@ -113,6 +113,7 @@ export class BotInstance {
                 const cmd = msg.split(' ')[0];
                 if (cmd === '!노래') await this.songs.handleCommand(chat, this.chat!, this.settings.getSettings());
                 else if (cmd === '!시참') await this.participation.handleCommand(chat, this.chat!);
+                else if (cmd === '!포인트' || cmd === this.settings.getSettings().pointsName) await this.points.handleCommand(chat, this.chat!, this.settings.getSettings());
             }
             if (this.commands.hasCommand(msg)) await this.commands.executeCommand(chat, this.chat!);
             else if (this.counters.hasCounter(msg)) await this.counters.checkAndRespond(chat, this.chat!);
@@ -155,7 +156,7 @@ export class BotInstance {
     }
 
     public getChannelInfo() { return { channelId: this.channelId, channelName: this.channel?.channelName || "정보 없음", channelImageUrl: this.channel?.channelImageUrl || "", followerCount: this.channel?.followerCount || 0 }; }
-    public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: this.liveDetail?.liveCategoryValue || "미지정" }; }
+    public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: (this.liveDetail as any)?.liveCategoryValue || "미지정" }; }
     public getChannelId() { return this.channelId; }
 
     public async saveAll() {

@@ -63,7 +63,7 @@ export class DataManager {
                 this.syncTable(channelId, 'counters', data.counters.map((i: any) => ({ channel_id: channelId, trigger: i.trigger, response: i.response, count: i.count || 0, enabled: i.enabled, once_per_day: i.oncePerDay }))),
                 this.syncPoints(channelId, data.points)
             ]);
-        } catch (e) {}
+        } catch (e) { }
     }
 
     private static async syncTable(channelId: string, table: string, rows: any[]) {
@@ -82,7 +82,7 @@ export class DataManager {
         const { data } = await supabase.from('participation_history').select('nickname, count').eq('channel_id', channelId).order('count', { ascending: false }).limit(10);
         return data || [];
     }
-    
+
     // [New] 후원 로그 저장
     static async logDonation(channelId: string, donation: DonationEvent) {
         try {
@@ -90,7 +90,7 @@ export class DataManager {
                 channel_id: channelId,
                 user_id_hash: donation.profile?.userIdHash || 'unknown',
                 nickname: donation.profile?.nickname || '익명',
-                amount: donation.payAmount || 0,
+                amount: (donation as any).payAmount || donation.extras?.payAmount || 0,
                 message: donation.message || ''
             });
         } catch (e) {

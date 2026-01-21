@@ -20,6 +20,7 @@ export interface DrawState {
     keyword: string;
     candidates: { name: string; role: string; lastMessage: string }[];
     winner: any | null;
+    previousWinners: string[];
     timer: number;
     showOverlay: boolean;
     subsOnly: boolean;
@@ -31,6 +32,7 @@ export interface RouletteState {
     isSpinning: boolean;
     winner: string | null;
     rotation: number;
+    transition: string;
     showOverlay: boolean;
 }
 
@@ -41,11 +43,11 @@ export class VoteManager {
         allowMultiVote: false, showOverlay: false, voteUnit: 1000
     };
     private drawState: DrawState = {
-        sessionId: null, status: 'idle', keyword: '!참여', candidates: [], winner: null,
+        sessionId: null, status: 'idle', keyword: '!참여', candidates: [], winner: null, previousWinners: [],
         timer: 0, showOverlay: false, subsOnly: false
     };
     private rouletteState: RouletteState = {
-        items: [], activeItems: [], isSpinning: false, winner: null, rotation: 0, showOverlay: false
+        items: [], activeItems: [], isSpinning: false, winner: null, rotation: 0, transition: 'none', showOverlay: false
     };
 
     private intervals: { vote?: NodeJS.Timeout, draw?: NodeJS.Timeout } = {};
@@ -101,6 +103,10 @@ export class VoteManager {
                     keyword: draw.keyword,
                     candidates: (parts || []).map((p: any) => ({ name: p.nickname, role: p.role, lastMessage: '' })),
                     winner: null,
+                    // Typically do not load previous winners from old session if this is fresh init, 
+                    // but if restoring session, we might want to check DB for past winners in this session? 
+                    // For now, keep empty on restart to avoid complexity unless user complains.
+                    previousWinners: [],
                     timer: 0,
                     showOverlay: true,
                     subsOnly: draw.subs_only
@@ -343,6 +349,7 @@ export class VoteManager {
             keyword,
             candidates: [],
             winner: null,
+            previousWinners: [], // New draws start fresh usually
             timer: duration,
             showOverlay: true,
             subsOnly
@@ -374,6 +381,10 @@ export class VoteManager {
 
         const exists = this.drawState.candidates.find(c => c.name === chat.profile.nickname);
         if (!exists) {
+            // Check Previous Winners Exclusion (TODO: if enable flag is true)
+            // For now, always exclude
+            if (this.drawState.previousWinners.includes(chat.profile.nickname)) return;
+
             this.drawState.candidates.push({ name: chat.profile.nickname, role, lastMessage: msg });
 
             // [DB] Insert
@@ -392,12 +403,19 @@ export class VoteManager {
     public async pickDrawWinner(count: number = 1) {
         if (this.drawState.candidates.length === 0) return;
         this.drawState.status = 'picking';
-        // Animation simulation handled by frontend mostly, backend picks immediately
-        // Logic to pick random
-        const total = this.drawState.candidates.length;
-        const index = Math.floor(Math.random() * total);
-        const winner = this.drawState.candidates[index];
+
+        // Filter out previous winners just in case
+        const pool = this.drawState.candidates.filter(c => !this.drawState.previousWinners.includes(c.name));
+
+        if (pool.length === 0) {
+            // No valid candidates
+            return;
+        }
+
+        const index = Math.floor(Math.random() * pool.length);
+        const winner = pool[index];
         this.drawState.winner = winner;
+        this.drawState.previousWinners.push(winner.name);
         this.drawState.status = 'ended';
 
         // [DB] Update Winner
@@ -410,6 +428,20 @@ export class VoteManager {
         }
 
         this.broadcast();
+    }
+
+    public undoLastWinner() {
+        if (this.drawState.winner) {
+            const nickname = this.drawState.winner.name;
+            const idx = this.drawState.previousWinners.indexOf(nickname);
+            if (idx > -1) this.drawState.previousWinners.splice(idx, 1); // Remove from history so they can win again?
+            // Actually, if we undo, we probably want to *allow* them to be picked again OR just re-roll.
+            // If we remove from history, they are eligible again.
+
+            this.drawState.winner = null;
+            this.drawState.status = 'recruiting'; // Go back to state that allows actions
+            this.broadcast();
+        }
     }
 
     public stopDraw() {
@@ -426,6 +458,7 @@ export class VoteManager {
             sessionId: null,
             candidates: [],
             winner: null,
+            previousWinners: [],
             showOverlay: false
         };
         this.broadcast();
@@ -483,13 +516,29 @@ export class VoteManager {
             if (random <= 0) { winnerIndex = i; break; }
         }
 
+        // [Physics Logic]
+        let weightAccum = 0;
+        for (let i = 0; i < winnerIndex; i++) weightAccum += items[i].weight;
+
+        const segmentAngle = (items[winnerIndex].weight / totalWeight) * 360;
+        const randomOffset = (Math.random() - 0.5) * (segmentAngle * 0.8);
+        const winnerCenterAngle = ((weightAccum / totalWeight) * 360) + (segmentAngle / 2) + randomOffset;
+
+        const spins = 10;
+        const currentRot = this.rouletteState.rotation;
+        // Target Rotation Calculation matches Vue logic
+        const targetRot = Math.floor(currentRot / 360) * 360 - (360 * spins) - winnerCenterAngle;
+
+        this.rouletteState.rotation = targetRot;
+        this.rouletteState.transition = 'transform 4s cubic-bezier(0.2, 0.8, 0.2, 1)';
+
+        this.broadcast();
+
         setTimeout(() => {
             this.rouletteState.winner = items[winnerIndex].name;
             this.rouletteState.isSpinning = false;
             this.broadcast();
-        }, 5000);
-
-        this.broadcast();
+        }, 4000);
     }
 
     public resetRoulette() {

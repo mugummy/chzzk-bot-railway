@@ -4,6 +4,7 @@ export interface OverlayConfig {
     accentColor: string;
     opacity: number;
     scale: number;
+    theme: string;
 }
 
 export interface BotSettings {
@@ -41,13 +42,13 @@ export const defaultSettings: BotSettings = {
 
 export class SettingsManager {
     private settings: BotSettings;
-    private onStateChangeCallback: () => void = () => {};
-    private onChatEnabledCallback: (enabled: boolean) => void = () => {};
+    private onStateChangeCallback: () => void = () => { };
+    private onChatEnabledCallback: (enabled: boolean) => void = () => { };
 
     constructor(initialSettings?: any) {
         // 깊은 병합으로 누락된 설정 보완
-        this.settings = { 
-            ...defaultSettings, 
+        this.settings = {
+            ...defaultSettings,
             ...initialSettings,
             overlay: { ...defaultSettings.overlay, ...(initialSettings?.overlay || {}) }
         };
@@ -63,7 +64,7 @@ export class SettingsManager {
 
     public updateSettings(newSettings: Partial<BotSettings>) {
         const oldChatEnabled = this.settings.chatEnabled;
-        
+
         // 오버레이 설정 등 깊은 병합 처리
         this.settings = {
             ...this.settings,

@@ -9,7 +9,7 @@ export interface UserPoint {
 
 export class PointManager {
     private points: { [userIdHash: string]: UserPoint } = {};
-    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
+    private onStateChangeCallback: (type: string, payload: any) => void = () => { };
 
     // [수정] 중복된 생성자 제거 및 단일화
     constructor(initialData?: { [userIdHash: string]: UserPoint }) {
@@ -45,5 +45,15 @@ export class PointManager {
 
     public getPointsData() {
         return this.points;
+    }
+
+    public handleCommand(chat: ChatEvent, chzzkChat: any, settings: BotSettings) {
+        const msg = chat.message.trim();
+        const cmd = settings.pointsName || '!포인트';
+        if (msg !== cmd && msg !== '!포인트') return;
+
+        const userId = chat.profile.userIdHash;
+        const pts = this.getPoints(userId);
+        chzzkChat.sendChat(`${chat.profile.nickname}님의 포인트: ${pts} P`);
     }
 }

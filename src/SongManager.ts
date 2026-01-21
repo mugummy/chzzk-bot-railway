@@ -14,7 +14,7 @@ export class SongManager {
     private queue: Song[] = [];
     private currentSong: Song | null = null;
     private isPlaying: boolean = false;
-    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
+    private onStateChangeCallback: (type: string, payload: any) => void = () => { };
     private isPlayerConnected: boolean = false;
     private userCooldowns: Map<string, number> = new Map();
 
@@ -22,16 +22,16 @@ export class SongManager {
         this.queue = initialData.songQueue || [];
         this.currentSong = initialData.currentSong || null;
         // DB에 저장된 상태가 있다면 복구, 없으면 false
-        this.isPlaying = false; 
+        this.isPlaying = false;
     }
 
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) {
         this.onStateChangeCallback = callback;
     }
 
-    private notify(type: string = 'songStateUpdate', payload: any = this.getState()) { 
+    private notify(type: string = 'songStateUpdate', payload: any = this.getState()) {
         this.onStateChangeCallback(type, payload);
-        this.bot.saveAll(); 
+        this.bot.saveAll();
     }
 
     public getState() { return { queue: this.queue, currentSong: this.currentSong, isPlaying: this.isPlaying }; }
@@ -89,7 +89,7 @@ export class SongManager {
                 if (!this.currentSong) this.playNext();
                 else this.notify();
             } catch (err) { chzzkChat.sendChat('❌ 영상 정보를 가져올 수 없습니다.'); }
-        } 
+        }
         else if (subCmd === '스킵') {
             const role = chat.profile.userRoleCode;
             if (role === 'streamer' || role === 'manager' || chat.profile.badge?.imageUrl?.includes('manager')) {
@@ -100,15 +100,16 @@ export class SongManager {
             }
         }
         else if (subCmd === '대기열') {
-            const list = this.queue.slice(0, 3).map((s, i) => `${i+1}. ${s.title}`).join(' / ');
+            const list = this.queue.slice(0, 3).map((s, i) => `${i + 1}. ${s.title}`).join(' / ');
             chzzkChat.sendChat(list ? `📜 대기열: ${list}...` : '📜 대기열이 비어있습니다.');
         }
     }
 
     public async addSongFromDonation(donation: DonationEvent, message: string, settings: any) {
         if (settings.songRequestMode === 'off') return;
-        if (donation.payAmount !== (settings.minDonationAmount || 0)) return;
-        
+        const amount = (donation as any).payAmount || donation.extras?.payAmount || 0;
+        if (amount !== (settings.minDonationAmount || 0)) return;
+
         const urlMatch = message.match(/(https?:\/\/[^\s]+)/);
         if (urlMatch && this.isValidYoutubeLink(urlMatch[0])) {
             try {
@@ -117,7 +118,7 @@ export class SongManager {
                 if (this.bot.chat) this.bot.chat.sendChat(`💰 후원 곡 추가: ${song.title}`);
                 if (!this.currentSong) this.playNext();
                 else this.notify();
-            } catch (err) {}
+            } catch (err) { }
         }
     }
 
@@ -134,7 +135,7 @@ export class SongManager {
                 else if (url.pathname.includes('/shorts/')) videoId = url.pathname.split('/shorts/')[1];
                 else if (url.hostname === 'youtu.be') videoId = url.pathname.slice(1);
             }
-        } catch (e) {}
+        } catch (e) { }
         const info = await ytdl.getBasicInfo(videoId);
         return { videoId: info.videoDetails.videoId, title: info.videoDetails.title, thumbnail: info.videoDetails.thumbnails[0]?.url, requester, requestedAt: Date.now() };
     }
@@ -165,13 +166,13 @@ export class SongManager {
     // [핵심] 재생/일시정지 토글 시 플레이어 제어 신호 발송
     public togglePlayPause() {
         this.isPlaying = !this.isPlaying;
-        
+
         // 1. 상태 업데이트 (아이콘 변경용)
         this.notify();
-        
+
         // 2. 플레이어 제어 신호 (실제 유튜브 제어용)
         this.onStateChangeCallback('playerControl', { action: this.isPlaying ? 'play' : 'pause' });
-        
+
         console.log(`[SongManager] Toggled Playback: ${this.isPlaying ? 'Playing' : 'Paused'}`);
     }
 
