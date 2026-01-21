@@ -60,35 +60,31 @@ wss.on('connection', async (ws, req) => {
 
     const sendFullState = async (bot: any) => {
         if (!bot) return;
-        
-        try { await bot.refreshLiveInfo(); } catch(e) {}
-        
+
+        try { await bot.refreshLiveInfo(); } catch (e) { }
+
         const safeSend = (type: string, payload: any) => {
-            try { ws.send(JSON.stringify({ type, payload })); } catch(e) { console.error(`Failed to send ${type}`, e); }
+            try { ws.send(JSON.stringify({ type, payload })); } catch (e) { console.error(`Failed to send ${type}`, e); }
         };
 
         // [Fix] connectResult는 가장 먼저, 무조건 보냄
         ws.send(JSON.stringify({ type: 'connectResult', success: true, channelInfo: bot.getChannelInfo(), liveStatus: bot.getLiveStatus() }));
 
-        try { safeSend('settingsUpdate', bot.settings.getSettings()); } catch(e) {}
-        try { safeSend('commandsUpdate', bot.commands.getCommands()); } catch(e) {}
-        try { safeSend('countersUpdate', bot.counters.getCounters()); } catch(e) {}
-        try { safeSend('macrosUpdate', bot.macros.getMacros()); } catch(e) {}
-        try { safeSend('songStateUpdate', bot.songs.getState()); } catch(e) {}
-        try { safeSend('participationStateUpdate', bot.participation.getState()); } catch(e) {}
-        try { safeSend('greetStateUpdate', bot.greet.getState()); } catch(e) {}
+        try { safeSend('settingsUpdate', bot.settings.getSettings()); } catch (e) { }
+        try { safeSend('commandsUpdate', bot.commands.getCommands()); } catch (e) { }
+        try { safeSend('countersUpdate', bot.counters.getCounters()); } catch (e) { }
+        try { safeSend('macrosUpdate', bot.macros.getMacros()); } catch (e) { }
+        try { safeSend('songStateUpdate', bot.songs.getState()); } catch (e) { }
+        try { safeSend('participationStateUpdate', bot.participation.getState()); } catch (e) { }
+        try { safeSend('greetStateUpdate', bot.greet.getState()); } catch (e) { }
 
-        // Vote/Draw/Roulette State
-        try { safeSend('voteStateUpdate', bot.vote.getState()); } catch(e) {}
-        try { safeSend('drawStateUpdate', bot.draw.getState()); } catch(e) {}
-        try { safeSend('rouletteStateUpdate', bot.roulette.getState()); } catch(e) {}
 
-        try { safeSend('chatHistoryLoad', channelChatHistory.get(channelId) || []); } catch(e) {}
-        
+        try { safeSend('chatHistoryLoad', channelChatHistory.get(channelId) || []); } catch (e) { }
+
         try {
             const ranking = await DataManager.loadParticipationHistory(channelId);
             safeSend('participationRankingUpdate', ranking);
-        } catch (e) {}
+        } catch (e) { }
     };
 
     ws.on('message', async (message) => {
@@ -98,7 +94,7 @@ wss.on('connection', async (ws, req) => {
 
             if (data.type === 'connect') {
                 if (!bot) bot = await botManager.getOrCreateBot(channelId);
-                
+
                 // BotInstance가 broadcast를 직접 할 수 있도록 콜백 연결
                 bot.setBroadcastCallback(broadcast);
 
@@ -118,11 +114,11 @@ wss.on('connection', async (ws, req) => {
             switch (data.type) {
                 case 'requestData': await sendFullState(bot); break;
                 case 'updateSettings': bot.settings.updateSettings(data.data); break;
-                
+
                 case 'addCommand': bot.commands.addCommand(data.data.trigger, data.data.response); break;
                 case 'removeCommand': bot.commands.removeCommand(data.data.trigger); break;
                 case 'updateCommand': bot.commands.removeCommand(data.data.oldTrigger); bot.commands.addCommand(data.data.trigger, data.data.response); break;
-                case 'toggleCommand': 
+                case 'toggleCommand':
                     const tCmd = bot.commands.getCommands().find(c => (c.triggers?.[0] || (c as any).trigger) === data.data.trigger);
                     if (tCmd) { tCmd.enabled = data.data.enabled; bot.saveAll(); broadcast('commandsUpdate', bot.commands.getCommands()); }
                     break;
@@ -151,65 +147,6 @@ wss.on('connection', async (ws, req) => {
                     if (data.action === 'togglePlayPause') bot.songs.togglePlayPause();
                     if (data.action === 'playNext') bot.songs.playNext();
                     if (data.action === 'remove') bot.songs.removeSong(data.index);
-                    break;
-
-                // Vote Handlers
-                case 'createVote':
-                    await bot.vote.createVote(
-                        data.title,
-                        data.options,
-                        data.mode,
-                        data.allowMultiple,
-                        data.minDonation || 1000,
-                        data.timerSeconds || null
-                    );
-                    break;
-                case 'startVote':
-                    await bot.vote.startVote();
-                    break;
-                case 'endVote':
-                    await bot.vote.endVote();
-                    break;
-                case 'resetVote':
-                    await bot.vote.resetVote();
-                    break;
-                case 'pickVoteWinner':
-                    const voteWinner = await bot.vote.pickWinner(data.optionId);
-                    ws.send(JSON.stringify({ type: 'voteWinnerResult', payload: voteWinner }));
-                    break;
-
-                // Draw Handlers
-                case 'startDraw':
-                    await bot.draw.startRecruiting(
-                        data.keyword || null,
-                        data.subsOnly || false,
-                        data.excludeWinners || false
-                    );
-                    break;
-                case 'stopDraw':
-                    await bot.draw.stopRecruiting();
-                    break;
-                case 'pickDrawWinner':
-                    const drawWinner = await bot.draw.pickWinner();
-                    ws.send(JSON.stringify({ type: 'drawWinnerResult', payload: drawWinner }));
-                    break;
-                case 'resetDraw':
-                    await bot.draw.resetDraw();
-                    break;
-                case 'clearDrawWinners':
-                    await bot.draw.clearPreviousWinners();
-                    break;
-
-                // Roulette Handlers
-                case 'updateRoulette':
-                    await bot.roulette.updateItems(data.items);
-                    break;
-                case 'spinRoulette':
-                    const rouletteResult = await bot.roulette.spin();
-                    ws.send(JSON.stringify({ type: 'rouletteResult', payload: rouletteResult }));
-                    break;
-                case 'resetRoulette':
-                    await bot.roulette.resetRoulette();
                     break;
             }
         } catch (err) { console.error('[WS] System Error:', err); }

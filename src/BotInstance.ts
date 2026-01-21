@@ -8,9 +8,6 @@ import { SettingsManager } from './SettingsManager';
 import { CounterManager } from './CounterManager';
 import { MacroManager } from './MacroManager';
 import { ParticipationManager } from './ParticipationManager';
-import { VoteManager } from './VoteManager';
-import { DrawManager } from './DrawManager';
-import { RouletteManager } from './RouletteManager';
 
 export class BotInstance {
     private client: ChzzkClient;
@@ -20,7 +17,7 @@ export class BotInstance {
     private livePollingTimer: NodeJS.Timeout | null = null;
     public liveDetail: LiveDetail | null = null;
     public channel: Channel | null = null;
-    private wsBroadcastCallback: (type: string, payload: any) => void = () => {};
+    private wsBroadcastCallback: (type: string, payload: any) => void = () => { };
 
     public commands!: CommandManager;
     public songs!: SongManager;
@@ -30,12 +27,9 @@ export class BotInstance {
     public counters!: CounterManager;
     public macros!: MacroManager;
     public participation!: ParticipationManager;
-    public vote!: VoteManager;
-    public draw!: DrawManager;
-    public roulette!: RouletteManager;
 
-    private onStateChangeCallback: (type: string, payload: any) => void = () => {};
-    private onChatCallback: (chat: ChatEvent) => void = () => {};
+    private onStateChangeCallback: (type: string, payload: any) => void = () => { };
+    private onChatCallback: (chat: ChatEvent) => void = () => { };
 
     constructor(private channelId: string, nidAuth: string, nidSes: string) {
         this.client = new ChzzkClient({ nidAuth, nidSession: nidSes });
@@ -44,7 +38,7 @@ export class BotInstance {
     public setOnStateChangeListener(callback: (type: string, payload: any) => void) { this.onStateChangeCallback = callback; }
     public setOnChatListener(callback: (chat: ChatEvent) => void) { this.onChatCallback = callback; }
     public setBroadcastCallback(callback: (type: string, payload: any) => void) { this.wsBroadcastCallback = callback; }
-    
+
     public broadcast(type: string, payload: any) {
         this.wsBroadcastCallback(type, payload);
     }
@@ -70,13 +64,7 @@ export class BotInstance {
         this.participation = new ParticipationManager(this as any, data.participants);
         this.participation.setOnStateChangeListener(() => this.notify('participationStateUpdate', this.participation.getState()));
 
-        // Vote/Draw/Roulette Managers
-        this.vote = new VoteManager(this);
-        this.vote.setOnStateChangeListener((type, payload) => this.notify(type, payload));
-        this.draw = new DrawManager(this);
-        this.draw.setOnStateChangeListener((type, payload) => this.notify(type, payload));
-        this.roulette = new RouletteManager(this);
-        this.roulette.setOnStateChangeListener((type, payload) => this.notify(type, payload));
+
 
         try {
             await this.refreshLiveInfo();
@@ -93,24 +81,22 @@ export class BotInstance {
                 });
                 await this.chat.connect();
             }
-        } catch (e) {}
+        } catch (e) { }
     }
 
-    public async refreshLiveInfo() { try { this.channel = await this.client.channel(this.channelId); this.liveDetail = await this.client.live.detail(this.channelId); } catch (e) {} }
-    
+    public async refreshLiveInfo() { try { this.channel = await this.client.channel(this.channelId); this.liveDetail = await this.client.live.detail(this.channelId); } catch (e) { } }
+
     private async handleChat(chat: ChatEvent) {
         if (this.botUserIdHash && chat.profile.userIdHash === this.botUserIdHash) return;
         this.onChatCallback(chat);
         this.points.awardPoints(chat, this.settings.getSettings());
 
-        // 투표/추첨 채팅 처리
-        this.vote.handleChat(chat);
-        this.draw.handleChat(chat);
+        // 투표/추첨 채팅 처리 제거됨
 
         if (this.isLoggedIn && this.settings.getSettings().chatEnabled) {
             await this.greet.handleChat(chat, this.chat!);
             const msg = chat.message.trim();
-            
+
             // [New] 통합 명령어 가이드
             if (msg === '!명령어') {
                 await this.sendHelpGuide();
@@ -130,7 +116,7 @@ export class BotInstance {
     private async sendHelpGuide() {
         if (!this.chat) return;
         const s = this.settings.getSettings();
-        
+
         // 1. 커스텀 명령어 목록
         const allCmds = this.commands.getCommands();
         const customCmds = allCmds
@@ -143,7 +129,7 @@ export class BotInstance {
         const basicCmds = [];
         if (s.songRequestMode !== 'off') basicCmds.push('!노래');
         if (s.participationCommand) basicCmds.push(s.participationCommand);
-        if (s.pointsEnabled) basicCmds.push('!포인트');
+        if (s.pointsPerChat > 0) basicCmds.push('!포인트');
 
         // 3. 통합 메시지 생성
         let message = '';
@@ -158,7 +144,7 @@ export class BotInstance {
 
     private async handleDonation(donation: DonationEvent) {
         this.songs.addSongFromDonation(donation, donation.message || '', this.settings.getSettings());
-        this.vote.handleDonation(donation);
+        // this.vote.handleDonation(donation); // Removed
         await DataManager.logDonation(this.channelId, donation);
     }
 
@@ -166,18 +152,18 @@ export class BotInstance {
     public getLiveStatus() { return { liveTitle: this.liveDetail?.liveTitle || "오프라인", status: this.liveDetail?.status || "CLOSE", concurrentUserCount: this.liveDetail?.concurrentUserCount || 0, category: this.liveDetail?.liveCategoryValue || "미지정" }; }
     public getChannelId() { return this.channelId; }
 
-    public async saveAll() { 
-        await DataManager.saveData(this.channelId, { 
-            settings: this.settings.getSettings(), 
-            commands: this.commands.getCommands(), 
-            counters: this.counters.getCounters(), 
-            macros: this.macros.getMacros(), 
-            points: this.points.getPointsData(), 
-            songQueue: this.songs.getData().songQueue, 
-            currentSong: this.songs.getData().currentSong, 
-            greetData: this.greet.getData(), 
+    public async saveAll() {
+        await DataManager.saveData(this.channelId, {
+            settings: this.settings.getSettings(),
+            commands: this.commands.getCommands(),
+            counters: this.counters.getCounters(),
+            macros: this.macros.getMacros(),
+            points: this.points.getPointsData(),
+            songQueue: this.songs.getData().songQueue,
+            currentSong: this.songs.getData().currentSong,
+            greetData: this.greet.getData(),
             participants: this.participation.getState()
-        }); 
+        });
     }
 
     public async disconnect() { if (this.livePollingTimer) clearInterval(this.livePollingTimer); if (this.chat) { this.macros.stopAllMacros(); await this.chat.disconnect(); this.chat = null; } }
