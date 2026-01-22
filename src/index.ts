@@ -197,7 +197,7 @@ wss.on('connection', (ws, req) => {
 
         // ========== 시청자 추첨 ==========
         case 'startDrawRecruit':
-          if (bot) bot.vote.startDrawRecruit(data.keyword, data.subsOnly, data.duration);
+          if (bot) bot.vote.startDrawRecruit(data.keyword, data.subsOnly, data.excludeWinners, data.duration);
           break;
         case 'pickDrawWinner':
           if (bot) bot.vote.pickDrawWinner(data.count);

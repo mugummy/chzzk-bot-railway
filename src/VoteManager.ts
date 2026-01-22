@@ -24,6 +24,7 @@ export interface DrawState {
     timer: number;
     showOverlay: boolean;
     subsOnly: boolean;
+    excludeWinners: boolean;
 }
 
 export interface RouletteState {
@@ -44,7 +45,7 @@ export class VoteManager {
     };
     private drawState: DrawState = {
         sessionId: null, status: 'idle', keyword: '!참여', candidates: [], winner: null, previousWinners: [],
-        timer: 0, showOverlay: false, subsOnly: false
+        timer: 0, showOverlay: false, subsOnly: false, excludeWinners: false
     };
     private rouletteState: RouletteState = {
         items: [], activeItems: [], isSpinning: false, winner: null, rotation: 0, transition: 'none', showOverlay: false
@@ -109,7 +110,8 @@ export class VoteManager {
                     previousWinners: [],
                     timer: 0,
                     showOverlay: true,
-                    subsOnly: draw.subs_only
+                    subsOnly: draw.subs_only,
+                    excludeWinners: draw.exclude_winners ?? false
                 };
             }
         } catch (e) {
@@ -330,13 +332,14 @@ export class VoteManager {
     // ==========================================
     // DRAW SYSTEM (Viewer Pickup)
     // ==========================================
-    public async startDrawRecruit(keyword: string, subsOnly: boolean, duration: number) {
+    public async startDrawRecruit(keyword: string, subsOnly: boolean, excludeWinners: boolean, duration: number) {
         let dbSessionId: string | null = null;
         try {
             const { data } = await supabase.from('draw_sessions').insert({
                 channel_id: this.bot.getChannelId(),
                 keyword,
                 subs_only: subsOnly,
+                // exclude_winners: excludeWinners, // TODO: Add column to DB if persistent
                 status: 'recruiting',
                 created_at: new Date().toISOString()
             }).select().single();
@@ -352,7 +355,8 @@ export class VoteManager {
             previousWinners: [], // New draws start fresh usually
             timer: duration,
             showOverlay: true,
-            subsOnly
+            subsOnly,
+            excludeWinners
         };
 
         if (this.intervals.draw) clearInterval(this.intervals.draw);
@@ -381,9 +385,8 @@ export class VoteManager {
 
         const exists = this.drawState.candidates.find(c => c.name === chat.profile.nickname);
         if (!exists) {
-            // Check Previous Winners Exclusion (TODO: if enable flag is true)
-            // For now, always exclude
-            if (this.drawState.previousWinners.includes(chat.profile.nickname)) return;
+            // Check Previous Winners Exclusion
+            if (this.drawState.excludeWinners && this.drawState.previousWinners.includes(chat.profile.nickname)) return;
 
             this.drawState.candidates.push({ name: chat.profile.nickname, role, lastMessage: msg });
 
