@@ -97,6 +97,5 @@ export class DataManager {
             console.error('[DataManager] Failed to log donation:', e);
         }
     }
-
     private static getDefault(channelId: string) { return { settings: defaultSettings, greetData: { settings: { enabled: true, type: 1, message: "반갑습니다!" }, history: {} }, songQueue: [], currentSong: null, participants: { queue: [], active: [], isActive: false, max: 10 }, commands: [], macros: [], counters: [], points: {} }; }
 }
